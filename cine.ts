@@ -432,6 +432,12 @@ function pngSize(path: string): { w: number; h: number } | null {
   }
 }
 
+function gridThumbPath(png: string): string {
+  const thumb = png.replace(/\.png$/, ".grid.png");
+  if (!existsSync(thumb)) sips(["-s", "format", "png", "-Z", "360", png, "--out", thumb]);
+  return existsSync(thumb) ? thumb : png;
+}
+
 /** Download + convert a movie's poster; returns the cached PNG path or null. */
 async function ensurePoster(movie: Movie): Promise<string | null> {
   const url = movie.poster || movie.imdbPoster;
@@ -460,25 +466,29 @@ function posterCellCols(png: string | null, rows: number): number {
   return Math.max(1, Math.round((rows * 2 * w) / h));
 }
 
-const kittyTransferred = new Set<number>();
+const b64Cache = new Map<string, string>();
 
-/** Upload a PNG to the terminal once under a numeric image id (no placement). */
-function kittyTransfer(png: string, id: number) {
-  if (kittyTransferred.has(id)) return;
-  const data = readFileSync(png).toString("base64");
-  let out = "";
-  for (let i = 0; i < data.length; i += 4096) {
-    const chunk = data.slice(i, i + 4096);
-    const ctrl = i === 0 ? `f=100,a=t,q=2,i=${id},m=${i + 4096 >= data.length ? 0 : 1}` : `m=${i + 4096 >= data.length ? 0 : 1}`;
-    out += `\x1b_G${ctrl};${chunk}\x1b\\`;
+function pngB64(path: string): string {
+  let hit = b64Cache.get(path);
+  if (!hit) {
+    hit = readFileSync(path).toString("base64");
+    b64Cache.set(path, hit);
   }
-  process.stdout.write(out);
-  kittyTransferred.add(id);
+  return hit;
 }
 
-/** Place an already-transferred image at (row,col), scaled into rows×cols cells. */
-function kittyPlace(id: number, row: number, col: number, rows: number, cols: number) {
-  process.stdout.write(`\x1b[${row};${col}H\x1b_Ga=p,i=${id},q=2,C=1,r=${rows},c=${cols}\x1b\\`);
+/** Transfer + display a PNG at (row,col), scaled into rows×cols cells (a=T). */
+// ponytail: re-sends image data on every full redraw — a=p placements by id
+// didn't render in Ghostty, and small grid thumbs keep this cheap
+function drawPoster(png: string, row: number, col: number, rows: number, cols: number) {
+  const data = pngB64(png);
+  let s = `\x1b[${row};${col}H`;
+  for (let i = 0; i < data.length; i += 4096) {
+    const last = i + 4096 >= data.length;
+    const ctrl = i === 0 ? `f=100,a=T,C=1,q=2,r=${rows},c=${cols},m=${last ? 0 : 1}` : `m=${last ? 0 : 1}`;
+    s += `\x1b_G${ctrl};${data.slice(i, i + 4096)}\x1b\\`;
+  }
+  process.stdout.write(s);
 }
 
 const halfblockCache = new Map<string, string[]>();
@@ -551,14 +561,8 @@ const state = {
   status: "",
   detailToken: 0,
   posterPaths: new Map<string, string | null>(),
+  grid: { scroll: 0, perRow: 1, viewRows: 1, pCols: 16, cellW: 19, cellH: 14 },
 };
-
-const imgIds = new Map<string, number>();
-
-function imgId(movieId: string): number {
-  if (!imgIds.has(movieId)) imgIds.set(movieId, imgIds.size + 1);
-  return imgIds.get(movieId)!;
-}
 
 function out(s: string) {
   process.stdout.write(s);
@@ -620,6 +624,29 @@ function header(cols: number): string {
 
 const GRID_POSTER_ROWS = 11;
 
+/** Screen position of a grid cell, or null if it's outside the visible window. */
+function cellPos(idx: number): { y: number; x: number } | null {
+  const g = state.grid;
+  const rel = idx - g.scroll * g.perRow;
+  if (rel < 0 || rel >= g.viewRows * g.perRow) return null;
+  return { y: 3 + Math.floor(rel / g.perRow) * g.cellH, x: 2 + (rel % g.perRow) * g.cellW };
+}
+
+/** Positioned title + rating lines for one grid cell (text only, no poster). */
+function cellText(idx: number, movie: Movie, selected: boolean): string {
+  const pos = cellPos(idx);
+  if (!pos) return "";
+  const pCols = state.grid.pCols;
+  const titleRaw = truncate(movie.title, pCols);
+  const titlePad = titleRaw + " ".repeat(Math.max(0, pCols - visLen(titleRaw)));
+  const title = selected ? `${A.inv}${A.bold}${titlePad}${A.reset}` : `${A.bold}${titlePad}${A.reset}`;
+  const marker = selected ? `${A.cyan}${A.bold}▸ ${A.reset}` : "  ";
+  return (
+    `\x1b[${pos.y + GRID_POSTER_ROWS};${pos.x}H${title}` +
+    `\x1b[${pos.y + GRID_POSTER_ROWS + 1};${pos.x}H${marker}${ratingStr(movie)} ${A.grey}${movie.minutes}′${A.reset}`
+  );
+}
+
 function renderList() {
   clearScreen();
   const cols = process.stdout.columns || 80;
@@ -638,48 +665,57 @@ function renderList() {
   const viewRows = Math.max(1, Math.floor((rows - 4) / cellH));
   const totalRows = Math.ceil(list.length / perRow);
   const selRow = Math.floor(state.sel / perRow);
-  const scroll = Math.max(0, Math.min(selRow - viewRows + 1, totalRows - viewRows));
+  // keep the current window unless the selection left it
+  let scroll = Math.min(Math.max(state.grid.scroll, selRow - viewRows + 1), selRow);
+  scroll = Math.max(0, Math.min(scroll, Math.max(0, totalRows - viewRows)));
+  state.grid = { scroll, perRow, viewRows, pCols, cellW, cellH };
 
   const useKitty = kittySupported();
-  const placements: { png: string; id: number; y: number; x: number }[] = [];
+  const posters: { png: string; y: number; x: number }[] = [];
 
   for (let i = 0; i < viewRows * perRow; i++) {
-    const idx = (scroll + Math.floor(i / perRow)) * perRow + (i % perRow);
+    const idx = scroll * perRow + i;
     const movie = list[idx];
     if (!movie) break;
-    const y = 3 + Math.floor(i / perRow) * cellH;
-    const x = 2 + (i % perRow) * cellW;
-    const selected = idx === state.sel;
+    const pos = cellPos(idx)!;
     const png = state.posterPaths.get(movie.id) ?? null;
 
     if (png && useKitty) {
-      placements.push({ png, id: imgId(movie.id), y, x });
+      posters.push({ png: gridThumbPath(png), y: pos.y, x: pos.x });
     } else if (png) {
       posterHalfblockLines(png, GRID_POSTER_ROWS).forEach((line, li) => {
-        buf += `\x1b[${y + li};${x}H${line}`;
+        buf += `\x1b[${pos.y + li};${pos.x}H${line}`;
       });
     } else {
-      buf += `\x1b[${y + Math.floor(GRID_POSTER_ROWS / 2)};${x}H${A.grey}${center("(no poster)", pCols)}${A.reset}`;
+      buf += `\x1b[${pos.y + Math.floor(GRID_POSTER_ROWS / 2)};${pos.x}H${A.grey}${center("(no poster)", pCols)}${A.reset}`;
     }
-
-    const titleRaw = truncate(movie.title, pCols);
-    const titlePad = titleRaw + " ".repeat(Math.max(0, pCols - visLen(titleRaw)));
-    const title = selected ? `${A.inv}${A.bold}${titlePad}${A.reset}` : `${A.bold}${titlePad}${A.reset}`;
-    buf += `\x1b[${y + GRID_POSTER_ROWS};${x}H${title}`;
-    const marker = selected ? `${A.cyan}${A.bold}▸ ${A.reset}` : "";
-    buf += `\x1b[${y + GRID_POSTER_ROWS + 1};${x}H${marker}${ratingStr(movie)} ${A.grey}${movie.minutes}′${A.reset}`;
+    buf += cellText(idx, movie, idx === state.sel);
   }
 
   const hints = ` ↑↓←→ move · ⏎ details · t trailer · b book · p prices · c cinema · r refresh · q quit`;
   buf += `\x1b[${rows};1H${A.grey}${truncate(hints, cols - 1)}${A.reset}`;
   out(buf);
 
-  for (const p of placements) {
-    kittyTransfer(p.png, p.id);
-    kittyPlace(p.id, p.y, p.x, GRID_POSTER_ROWS, pCols);
-  }
+  for (const p of posters) drawPoster(p.png, p.y, p.x, GRID_POSTER_ROWS, state.grid.pCols);
 
   if (state.showPrices) renderPrices(cols, rows);
+}
+
+/** Move the grid selection, repainting only text when the window doesn't scroll. */
+function moveSelection(newSel: number) {
+  const list = gridMovies();
+  const clamped = Math.max(0, Math.min(list.length - 1, newSel));
+  if (clamped === state.sel) return;
+  const g = state.grid;
+  const selRow = Math.floor(clamped / g.perRow);
+  const stays = selRow >= g.scroll && selRow < g.scroll + g.viewRows;
+  const old = state.sel;
+  state.sel = clamped;
+  if (stays) {
+    out(cellText(old, list[old], false) + cellText(clamped, list[clamped], true));
+  } else {
+    renderList(); // window moved — full redraw (posters re-emit)
+  }
 }
 
 function renderPrices(cols: number, rows: number) {
@@ -743,8 +779,7 @@ async function renderDetail() {
   if (token !== state.detailToken || state.view !== "detail") return;
   if (png) {
     if (useKitty) {
-      kittyTransfer(png, imgId(m.id));
-      kittyPlace(imgId(m.id), 4, 3, posterRows, posterCellCols(png, posterRows));
+      drawPoster(png, 4, 3, posterRows, posterCellCols(png, posterRows));
     } else {
       posterHalfblockLines(png, posterRows).forEach((line, i) => {
         out(`\x1b[${4 + i};3H${line}`);
@@ -869,23 +904,17 @@ async function handleKey(key: string) {
     return render();
   }
   const last = Math.max(0, list.length - 1);
-  const step = state.view === "list" ? state.perRow : 1; // detail: ↑↓ step one movie
-  if (key === "\x1b[C") {
-    state.sel = Math.min(last, state.sel + 1);
+  const inList = state.view === "list";
+  const step = inList ? state.perRow : 1; // detail: ↑↓ step one movie
+  const move = (target: number) => {
+    if (inList) return moveSelection(target);
+    state.sel = Math.max(0, Math.min(last, target));
     return render();
-  }
-  if (key === "\x1b[D") {
-    state.sel = Math.max(0, state.sel - 1);
-    return render();
-  }
-  if (key === "\x1b[A") {
-    state.sel = Math.max(0, state.sel - step);
-    return render();
-  }
-  if (key === "\x1b[B") {
-    state.sel = Math.min(last, state.sel + step);
-    return render();
-  }
+  };
+  if (key === "\x1b[C") return move(state.sel + 1);
+  if (key === "\x1b[D") return move(state.sel - 1);
+  if (key === "\x1b[A") return move(state.sel - step);
+  if (key === "\x1b[B") return move(state.sel + step);
   if (key === "\r") {
     if (state.view === "list" && selMovie) state.view = "detail";
     return render();

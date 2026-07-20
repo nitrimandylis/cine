@@ -19,8 +19,10 @@ binary (`bun run compile` → `~/.bun/bin/cine`) with a man page.
 - Interactive TUI: poster-grid main view (all movies, sorted by rating,
   arrow keys to move), ⏎ detail view with big poster + every day's
   showtimes, `t` trailer, `b` booking page, `p` price table, `c` cinema
-  switcher, `r` refresh, `q` quit. Posters upload to the terminal once
-  (Kitty image IDs) and re-place instantly on navigation.
+  switcher, `r` refresh, `q` quit. Selection moves repaint only text;
+  posters (small pre-scaled thumbs) re-emit only when the grid scrolls —
+  Ghostty didn't render id-based Kitty placements (a=p), so cine sticks to
+  direct a=T draws.
 - Remembers the last-used cinema (`~/.config/cine/config.json`).
 - 12-hour JSON cache + poster cache (`~/.cache/cine/`), auto-invalidated
   when stale or all dates have passed.
