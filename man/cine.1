@@ -14,8 +14,10 @@ Posters render inline via the Kitty graphics protocol (Ghostty,
 kitty, WezTerm) with a half-block fallback for other terminals, converted
 with
 .BR sips (1).
-Results are cached for 12 hours. The chosen cinema is remembered between
-runs. When output is piped, a plain text list is printed instead of the TUI.
+Results are cached for 12 hours. The chosen cinema and sort order are
+remembered between runs. Showtimes are colored cyan (on sale), yellow (few
+seats left), or red with a cross (sold out). When output is piped, a plain
+text list is printed instead of the TUI.
 .SH OPTIONS
 .TP
 .BR \-c ", " \-\-cinema " " \fIid\fR
@@ -35,6 +37,18 @@ Ignore the cache and always fetch fresh data.
 .TP
 .BR \-h ", " \-\-help
 Show help.
+.SH COMMANDS
+.TP
+.B watch
+List active siren ticket watches.
+.TP
+.B watch \fItitle\fR [\fB\-\-imax\fR] [\fB\-c\fR \fIid\fR]
+Get notified when Village opens booking for \fItitle\fR, via the siren
+GitHub Actions watcher (requires an authenticated
+.BR gh (1)).
+.TP
+.B unwatch \fItitle\fR
+Stop watching \fItitle\fR.
 .SH KEYS
 .TP
 .B arrow keys
@@ -42,6 +56,12 @@ Move around the poster grid.
 .TP
 .B enter
 Open the movie's detail view (poster, plot, every day's showtimes).
+.TP
+.B s
+Cycle the grid sort: IMDB, Tomatometer, Popcornmeter, runtime.
+.TP
+.B w
+Watch/unwatch the selected movie for ticket alerts.
 .TP
 .B t
 Open the trailer in the browser.

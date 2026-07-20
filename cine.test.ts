@@ -14,7 +14,24 @@ import {
   parseRtSearch,
   parseRtScorecard,
   RT_ICONS,
+  sortValue,
+  SORTS,
 } from "./cine";
+
+test("sortValue orders by each key, missing scores last", () => {
+  const m = (rating: number | null, critic: number | null, audience: number | null, minutes: number) =>
+    ({ rating, minutes, rt: critic === null && audience === null ? null : { critic, audience } }) as any;
+  const good = m(8.4, 95, 97, 172);
+  const bad = m(5.7, 31, 89, 115);
+  const unknown = m(null, null, null, 80);
+  expect(sortValue(good, "imdb")).toBeGreaterThan(sortValue(bad, "imdb"));
+  expect(sortValue(bad, "imdb")).toBeGreaterThan(sortValue(unknown, "imdb"));
+  expect(sortValue(good, "critics")).toBeGreaterThan(sortValue(bad, "critics"));
+  expect(sortValue(bad, "audience")).toBeLessThan(sortValue(good, "audience"));
+  // runtime sorts shortest first (higher value = earlier)
+  expect(sortValue(unknown, "runtime")).toBeGreaterThan(sortValue(bad, "runtime"));
+  expect(SORTS).toEqual(["imdb", "critics", "audience", "runtime"]);
+});
 
 test("pyList parses arrays and python-style stringified lists", () => {
   expect(pyList(["01", "21"])).toEqual(["01", "21"]);

@@ -40,6 +40,8 @@ man cine          # full reference, offline
 |-----|--------|
 | `↑` `↓` `←` `→` | move around the poster grid |
 | `⏎` | detail view — poster, plot, every day's showtimes |
+| `s` | cycle sort: IMDB → Tomatometer → Popcornmeter → runtime |
+| `w` | watch/unwatch: get pinged via [siren](https://github.com/nitrimandylis/siren) when tickets open |
 | `t` | open trailer in browser |
 | `b` | open booking page |
 | `p` | ticket price table |
@@ -47,8 +49,24 @@ man cine          # full reference, offline
 | `r` | refresh (skip cache) |
 | `q` / `esc` | quit / back |
 
+Showtime colors: cyan = on sale, yellow = few seats left, red `✗` = sold out.
+
 Flags for scripting: `-c <id>`, `-d DD/MM`, `--list`, `--clear`, `--no-cache`.
 Piped output (`cine -c 21 | cat`) prints a plain list instead of the TUI.
+
+## Ticket alerts
+
+`cine` manages the watch list of [siren](https://github.com/nitrimandylis/siren)
+(a GitHub Actions watcher that pings your phone when Village opens booking)
+through the GitHub API — no workflow editing, ever:
+
+```bash
+cine watch                      # list active watches
+cine watch "avatar 4" --imax    # pinged when IMAX tickets open
+cine unwatch "avatar 4"
+```
+
+Or just press `w` on any movie in the TUI. Requires an authed `gh`.
 
 ## Under the hood
 

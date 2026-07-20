@@ -63,10 +63,16 @@ usage:
   cine --clear         clear the cache for your cinema, then fetch fresh
   cine --no-cache      ignore the cache, always fetch fresh
 
-keys (inside the TUI):
-  ↑/↓/←/→ move around the poster grid   ⏎ details   t trailer   b book
-  p prices   c switch cinema   r refresh   q quit
+siren (ticket alerts via github.com/nitrimandylis/siren):
+  cine watch                     list active watches
+  cine watch <title> [--imax]    get pinged when tickets open (-c limits cinema)
+  cine unwatch <title>           stop watching
 
+keys (inside the TUI):
+  ↑/↓/←/→ move around the poster grid   ⏎ details   s cycle sort   w watch
+  t trailer   b book   p prices   c switch cinema   r refresh   q quit
+
+showtimes: cyan = on sale, yellow = few seats left, red ✗ = sold out.
 piped output (cine | cat) prints a plain list instead of the TUI.`;
 
 // ---------------------------------------------------------------------------
@@ -439,7 +445,9 @@ function saveCache(payload: CachePayload) {
   writeFileSync(cachePath(payload.cinemaId), JSON.stringify(payload));
 }
 
-function loadConfig(): { cinema?: string } {
+type Config = { cinema?: string; sort?: SortKey };
+
+function loadConfig(): Config {
   try {
     return JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
   } catch {
@@ -447,7 +455,7 @@ function loadConfig(): { cinema?: string } {
   }
 }
 
-function saveConfig(cfg: { cinema?: string }) {
+function saveConfig(cfg: Config) {
   mkdirSync(join(homedir(), ".config", "cine"), { recursive: true });
   writeFileSync(CONFIG_PATH, JSON.stringify(cfg));
 }
@@ -518,9 +526,12 @@ function badges(st: Showtime): string {
 
 function showtimeStr(st: Showtime): string {
   const b = badges(st);
+  // red ✗ = sold out, yellow = few seats left (Village's isLimited flag)
   const hour = st.soldout
     ? `${A.red}${A.dim}${st.hour}✗${A.reset}`
-    : `${A.cyan}${A.bold}${st.hour}${A.reset}`;
+    : st.limited
+      ? `${A.yellow}${A.bold}${st.hour}${A.reset}`
+      : `${A.cyan}${A.bold}${st.hour}${A.reset}`;
   return b ? `${hour}${A.dim}·${A.reset}${b}` : hour;
 }
 
@@ -770,6 +781,62 @@ function posterHalfblockLines(png: string, rows: number): string[] {
 }
 
 // ---------------------------------------------------------------------------
+// siren integration — manage nitrimandylis/siren's watches.json via gh(1)
+// so ticket alerts never require editing GitHub Actions by hand
+// ---------------------------------------------------------------------------
+
+const SIREN_REPO = "nitrimandylis/siren";
+
+type SirenWatch = { title: string; imax?: boolean; cinema?: string; from?: string };
+
+async function gh(args: string[]): Promise<string | null> {
+  try {
+    const proc = Bun.spawn(["gh", ...args], { stdout: "pipe", stderr: "ignore" });
+    const out = await new Response(proc.stdout).text();
+    return (await proc.exited) === 0 ? out : null;
+  } catch {
+    return null; // gh not installed
+  }
+}
+
+async function sirenFetch(): Promise<{ watches: SirenWatch[]; sha: string } | null> {
+  const out = await gh(["api", `repos/${SIREN_REPO}/contents/watches.json`]);
+  if (!out) return null;
+  const j = JSON.parse(out);
+  return {
+    watches: JSON.parse(Buffer.from(j.content, "base64").toString("utf-8")),
+    sha: j.sha,
+  };
+}
+
+async function sirenPut(watches: SirenWatch[], sha: string, message: string): Promise<boolean> {
+  const content = Buffer.from(JSON.stringify(watches, null, 2) + "\n").toString("base64");
+  const out = await gh([
+    "api", "-X", "PUT", `repos/${SIREN_REPO}/contents/watches.json`,
+    "-f", `message=${message}`, "-f", `content=${content}`, "-f", `sha=${sha}`,
+  ]);
+  return out !== null;
+}
+
+/** Add or remove a watch; returns a human message describing what happened. */
+async function sirenToggle(title: string, extra: Partial<SirenWatch> = {}): Promise<string> {
+  const cur = await sirenFetch();
+  if (!cur) return "siren unreachable (is gh authed?)";
+  const norm = title.trim().toUpperCase();
+  const existing = cur.watches.filter((w) => w.title.toUpperCase() === norm);
+  if (existing.length) {
+    const rest = cur.watches.filter((w) => w.title.toUpperCase() !== norm);
+    return (await sirenPut(rest, cur.sha, `unwatch ${norm}`))
+      ? `siren: stopped watching ${norm}`
+      : "siren update failed";
+  }
+  const next = [...cur.watches, { title: norm, ...extra }];
+  return (await sirenPut(next, cur.sha, `watch ${norm}`))
+    ? `siren: watching ${norm}`
+    : "siren update failed";
+}
+
+// ---------------------------------------------------------------------------
 // TUI
 // ---------------------------------------------------------------------------
 
@@ -787,6 +854,8 @@ const state = {
   showPrices: false,
   cinemaSel: 0,
   status: "",
+  flash: "",
+  sort: "imdb" as SortKey,
   detailToken: 0,
   posterPaths: new Map<string, string | null>(),
   grid: { scroll: 0, perRow: 1, viewRows: 1, pCols: 16, cellW: 19, cellH: 14 },
@@ -832,8 +901,25 @@ function computeDayList() {
   if (state.dayIdx >= state.dayList.length) state.dayIdx = 0;
 }
 
+export const SORTS = ["imdb", "critics", "audience", "runtime"] as const;
+export type SortKey = (typeof SORTS)[number];
+const SORT_LABELS: Record<SortKey, string> = {
+  imdb: "IMDB",
+  critics: "Tomatometer",
+  audience: "Popcornmeter",
+  runtime: "runtime",
+};
+
+/** Sort value for a movie under a given key — higher first (runtime: shortest first). */
+export function sortValue(m: Movie, key: SortKey): number {
+  if (key === "imdb") return m.rating ?? -1;
+  if (key === "critics") return m.rt?.critic ?? -1;
+  if (key === "audience") return m.rt?.audience ?? -1;
+  return -m.minutes;
+}
+
 function sortMovies() {
-  state.movies.sort((a, b) => (b.rating ?? -1) - (a.rating ?? -1));
+  state.movies.sort((a, b) => sortValue(b, state.sort) - sortValue(a, state.sort));
 }
 
 function renderStatus(msg: string) {
@@ -845,7 +931,9 @@ function renderStatus(msg: string) {
 
 function header(cols: number): string {
   const left = ` ${A.bold}${A.cyan}CINE${A.reset}  ${A.bold}${state.cinemaName}${A.reset}`;
-  const right = `${A.grey}${gridMovies().length} movies · sorted by IMDB${A.reset}`;
+  const right = state.flash
+    ? `${A.yellow}${state.flash}${A.reset}`
+    : `${A.grey}${gridMovies().length} movies · sorted by ${SORT_LABELS[state.sort]}${A.reset}`;
   const pad = Math.max(1, cols - visLen(left) - visLen(right) - 2);
   return left + " ".repeat(pad) + right + "\n" + A.grey + "─".repeat(cols) + A.reset + "\n";
 }
@@ -920,7 +1008,7 @@ function renderList() {
     buf += cellText(idx, movie, idx === state.sel);
   }
 
-  const hints = ` ↑↓←→ move · ⏎ details · t trailer · b book · p prices · c cinema · r refresh · q quit`;
+  const hints = ` ↑↓←→ move · ⏎ details · s sort · w watch · t trailer · b book · p prices · c cinema · r refresh · q quit`;
   buf += `\x1b[${rows};1H${A.grey}${truncate(hints, cols - 1)}${A.reset}`;
   out(buf);
 
@@ -1101,6 +1189,7 @@ function quit(): never {
 async function handleKey(key: string) {
   const list = gridMovies();
   const selMovie = list[state.sel];
+  state.flash = ""; // any keypress clears the last flash message
 
   if (key === "\x03" || key === "q") quit();
 
@@ -1110,7 +1199,7 @@ async function handleKey(key: string) {
     else if (key === "\x1b[B") state.cinemaSel = (state.cinemaSel + 1) % n;
     else if (key === "\r") {
       const id = Object.keys(CINEMAS)[state.cinemaSel];
-      saveConfig({ cinema: id });
+      saveConfig({ ...loadConfig(), cinema: id });
       state.view = "list";
       await loadData(id, false);
     } else if (key === "\x1b") state.view = "list";
@@ -1124,6 +1213,19 @@ async function handleKey(key: string) {
   }
   if (key === "t") return openUrl(selMovie?.trailer ?? "");
   if (key === "b") return openUrl(selMovie?.url ?? "");
+  if (key === "s") {
+    state.sort = SORTS[(SORTS.indexOf(state.sort) + 1) % SORTS.length];
+    saveConfig({ ...loadConfig(), sort: state.sort });
+    sortMovies();
+    state.sel = 0;
+    return render();
+  }
+  if (key === "w" && selMovie) {
+    state.flash = "siren: syncing…";
+    render();
+    state.flash = await sirenToggle(selMovie.title);
+    return render();
+  }
   if (key === "p") {
     state.showPrices = !state.showPrices;
     return render();
@@ -1185,10 +1287,12 @@ export function resolveDate(arg: string, dayList: string[]): string | null {
 }
 
 async function main() {
-  const { values } = parseArgs({
+  const { values, positionals } = parseArgs({
+    allowPositionals: true,
     options: {
       cinema: { type: "string", short: "c" },
       date: { type: "string", short: "d" },
+      imax: { type: "boolean" },
       list: { type: "boolean" },
       clear: { type: "boolean" },
       "no-cache": { type: "boolean" },
@@ -1197,12 +1301,39 @@ async function main() {
   });
 
   if (values.help) return console.log(HELP);
+
+  // siren subcommands: cine watch [title] [--imax] [-c id], cine unwatch <title>
+  const [cmd, ...args] = positionals;
+  if (cmd === "watch" || cmd === "unwatch") {
+    const title = args.join(" ").trim();
+    if (!title) {
+      const cur = await sirenFetch();
+      if (!cur) return console.error("siren unreachable (is gh authed?)");
+      if (!cur.watches.length) return console.log("no active watches");
+      for (const w of cur.watches) {
+        const extras = [w.imax && "imax", w.cinema && CINEMAS[w.cinema], w.from && `from ${w.from}`]
+          .filter(Boolean)
+          .join(", ");
+        console.log(`${w.title}${extras ? `  (${extras})` : ""}`);
+      }
+      return;
+    }
+    if (cmd === "unwatch") return console.log(await sirenToggle(title));
+    const cur = await sirenFetch();
+    if (cur?.watches.some((w) => w.title.toUpperCase() === title.toUpperCase()))
+      return console.log(`already watching ${title.toUpperCase()}`);
+    const extra: { imax?: boolean; cinema?: string } = {};
+    if (values.imax) extra.imax = true;
+    if (values.cinema) extra.cinema = values.cinema;
+    return console.log(await sirenToggle(title, extra));
+  }
   if (values.list) {
     for (const [id, name] of Object.entries(CINEMAS)) console.log(`${id}  ${name}`);
     return;
   }
 
   const config = loadConfig();
+  if (config.sort && SORTS.includes(config.sort)) state.sort = config.sort;
   let cinemaId = values.cinema ?? config.cinema ?? "";
   if (cinemaId && !CINEMAS[cinemaId]) {
     console.error(`Unknown cinema "${cinemaId}". Use --list to see IDs.`);

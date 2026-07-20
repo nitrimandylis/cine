@@ -28,13 +28,23 @@ binary (`bun run compile` → `~/.bun/bin/cine`) with a man page.
 - Remembers the last-used cinema (`~/.config/cine/config.json`).
 - 12-hour JSON cache + poster cache (`~/.cache/cine/`), auto-invalidated
   when stale or all dates have passed.
+- `s` cycles the sort (IMDB → Tomatometer → Popcornmeter → runtime),
+  persisted in config. Showtimes color-code availability: yellow = few
+  seats (Village's isLimited flag), red ✗ = sold out.
+- siren integration: `w` in the TUI or `cine watch/unwatch <title>` edits
+  the watches.json of nitrimandylis/siren via `gh api`, so ticket alerts
+  never require touching GitHub Actions.
 - Piped output falls back to a plain text list for scripting.
 - Flags: `-c`, `-d DD/MM`, `--list`, `--clear`, `--no-cache`.
 
 ## Where it's headed
 
 - Nothing planned. Candidates if wanted: other chains (Odeon/Cinepolis),
-  a "notify me when tickets open" watch mode, seat availability detail.
+  publishing the repo.
+- Ruled out: full seat maps — Village's seat-plan endpoint only unlocks
+  after the captcha-gated addtickets step (reCAPTCHA Enterprise), and
+  automating past a captcha is off the table. The isLimited flag is the
+  best keyless availability signal.
 
 ## Known ceilings
 
