@@ -4,10 +4,12 @@
 
 A terminal UI for Village Cinemas (Greece): what's playing, when, and whether
 it's any good. Scrapes villagecinemas.gr's booking data, enriches every movie
-with its IMDB rating/plot via keyless public endpoints (suggestion API +
-GraphQL), and presents it as an interactive list sorted by rating — with real
-movie posters rendered in the terminal (Kitty graphics protocol in
-Ghostty/kitty/WezTerm, half-block mosaic elsewhere).
+with its IMDB rating/plot (keyless suggestion API + GraphQL) and Rotten
+Tomatoes critic + audience scores (server-rendered search page + embedded
+scorecard JSON), and presents it as an interactive poster grid sorted by
+rating — posters render in the terminal (Kitty graphics protocol in
+Ghostty/kitty/WezTerm, half-block mosaic elsewhere), and RT states show as
+ANSI recreations of the official icon set.
 
 A TypeScript/Bun rewrite of [village_crawler](https://github.com/johneliades/village_crawler)
 with a full TUI instead of static output. Zero runtime dependencies; system

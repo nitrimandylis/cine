@@ -11,6 +11,9 @@ import {
   parseBookingData,
   resolveDate,
   stripAnsi,
+  parseRtSearch,
+  parseRtScorecard,
+  RT_ICONS,
 } from "./cine";
 
 test("pyList parses arrays and python-style stringified lists", () => {
@@ -122,4 +125,53 @@ test("resolveDate maps DD/MM onto the day list", () => {
 
 test("stripAnsi removes escape codes", () => {
   expect(stripAnsi("\x1b[1;32mhi\x1b[0m")).toBe("hi");
+});
+
+test("every RT icon line is exactly 9 visible columns", () => {
+  for (const [name, lines] of Object.entries(RT_ICONS)) {
+    expect(lines).toHaveLength(4);
+    for (const line of lines) {
+      expect({ name, width: stripAnsi(line).length }).toEqual({ name, width: 9 });
+    }
+  }
+});
+
+test("parseRtSearch prefers recent releases", () => {
+  const row = (url: string, year: number) =>
+    `<search-page-media-row release-year="${year}"><a href="${url}">x</a></search-page-media-row>`;
+  const html =
+    row("https://www.rottentomatoes.com/m/the_odyssey_1997", 1997) +
+    row("https://www.rottentomatoes.com/m/the_odyssey_2026", 2026);
+  expect(parseRtSearch(html, 2026)).toBe("https://www.rottentomatoes.com/m/the_odyssey_2026");
+  expect(parseRtSearch(row("https://www.rottentomatoes.com/m/old_movie", 1997), 2026)).toBe(
+    "https://www.rottentomatoes.com/m/old_movie",
+  );
+  expect(parseRtSearch("<html>no rows</html>", 2026)).toBe(null);
+});
+
+test("parseRtScorecard maps scores and icon states", () => {
+  const sc = {
+    criticsScore: { score: "82", certified: true, sentiment: "POSITIVE", reviewCount: 369 },
+    audienceScore: { score: "97", scoreType: "VERIFIED", certified: true, sentiment: "POSITIVE", reviewCount: 5547 },
+  };
+  const html = `<script id="media-scorecard-json" type="application/json">${JSON.stringify(sc)}</script>`;
+  const rt = parseRtScorecard(html, "https://rt/m/x")!;
+  expect(rt.critic).toBe(82);
+  expect(rt.criticState).toBe("certified");
+  expect(rt.criticCount).toBe(369);
+  expect(rt.audience).toBe(97);
+  expect(rt.audienceState).toBe("verified");
+  expect(rt.audienceCount).toBe(5547);
+
+  const rotten = parseRtScorecard(
+    `<script id="media-scorecard-json">${JSON.stringify({
+      criticsScore: { score: "40", certified: false, sentiment: "NEGATIVE", reviewCount: 10 },
+      audienceScore: { score: "55", scoreType: "", certified: false, sentiment: "NEGATIVE", reviewCount: 99 },
+    })}</script>`,
+    "u",
+  )!;
+  expect(rotten.criticState).toBe("rotten");
+  expect(rotten.audienceState).toBe("spilled");
+
+  expect(parseRtScorecard("<html></html>", "u")).toBe(null);
 });

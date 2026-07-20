@@ -85,6 +85,16 @@ export type Showtime = {
   limited: boolean;
 };
 
+export type RtScores = {
+  critic: number | null;
+  criticState: "certified" | "fresh" | "rotten" | null;
+  criticCount: number;
+  audience: number | null;
+  audienceState: "verified" | "upright" | "spilled" | null;
+  audienceCount: number;
+  url: string;
+};
+
 export type Movie = {
   id: string;
   title: string;
@@ -101,9 +111,18 @@ export type Movie = {
   imdbUrl: string;
   imdbPlot: string;
   imdbPoster: string;
+  rt: RtScores | null;
 };
 
-type CachePayload = { cachedAt: string; cinemaId: string; cinemaName: string; movies: Movie[] };
+const CACHE_VERSION = 2; // bump when Movie shape changes so stale caches refetch
+
+type CachePayload = {
+  v?: number;
+  cachedAt: string;
+  cinemaId: string;
+  cinemaName: string;
+  movies: Movie[];
+};
 
 // ---------------------------------------------------------------------------
 // Small pure helpers
@@ -243,6 +262,7 @@ export function parseBookingData(
       imdbUrl: "",
       imdbPlot: "",
       imdbPoster: "",
+      rt: null,
     });
   }
   return { cinemaName, movies };
@@ -294,10 +314,78 @@ async function imdbLookup(movie: Movie): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Rotten Tomatoes enrichment (server-rendered search page + scorecard JSON)
+// ---------------------------------------------------------------------------
+
+/** Pick the best /m/ movie URL from RT's search page HTML (prefers recent). */
+export function parseRtSearch(html: string, nowYear: number): string | null {
+  const rows = html.match(/<search-page-media-row[\s\S]*?<\/search-page-media-row>/g) ?? [];
+  const candidates: { url: string; year: number }[] = [];
+  for (const row of rows) {
+    const url = row.match(/href="(https:\/\/www\.rottentomatoes\.com\/m\/[^"]+)"/)?.[1];
+    const year = parseInt(row.match(/release-year="(\d*)"/)?.[1] ?? "", 10) || 0;
+    if (url) candidates.push({ url, year });
+  }
+  return (candidates.find((c) => c.year >= nowYear - 1) ?? candidates[0])?.url ?? null;
+}
+
+/** Extract Tomatometer + Popcornmeter from an RT movie page's scorecard JSON. */
+export function parseRtScorecard(html: string, url: string): RtScores | null {
+  const m = html.match(/id="media-scorecard-json"[^>]*>([\s\S]*?)<\/script>/);
+  if (!m) return null;
+  const sc = JSON.parse(m[1]);
+  const c = sc.criticsScore ?? {};
+  const a = sc.audienceScore ?? {};
+  const critic = parseInt(c.score, 10);
+  const audience = parseInt(a.score, 10);
+  if (isNaN(critic) && isNaN(audience)) return null;
+  return {
+    critic: isNaN(critic) ? null : critic,
+    criticState: isNaN(critic)
+      ? null
+      : c.certified
+        ? "certified"
+        : c.sentiment === "POSITIVE"
+          ? "fresh"
+          : "rotten",
+    criticCount: c.reviewCount ?? 0,
+    audience: isNaN(audience) ? null : audience,
+    audienceState: isNaN(audience)
+      ? null
+      : a.certified || a.scoreType === "VERIFIED"
+        ? "verified"
+        : a.sentiment === "POSITIVE"
+          ? "upright"
+          : "spilled",
+    audienceCount: a.reviewCount ?? 0,
+    url,
+  };
+}
+
+async function rtLookup(movie: Movie): Promise<void> {
+  try {
+    const q = encodeURIComponent(movie.title.toLowerCase().trim());
+    const search = await fetch(`https://www.rottentomatoes.com/search?search=${q}`, {
+      headers: { "User-Agent": UA },
+    });
+    if (!search.ok) return;
+    const url = parseRtSearch(await search.text(), new Date().getFullYear());
+    if (!url) return;
+    const page = await fetch(url, { headers: { "User-Agent": UA } });
+    if (!page.ok) return;
+    movie.rt = parseRtScorecard(await page.text(), url);
+  } catch {
+    // no RT data — the movie just shows nothing for RT
+  }
+}
+
 async function enrich(movies: Movie[], onProgress: (done: number, total: number) => void) {
   let done = 0;
   await Promise.all(
-    movies.map((m) => imdbLookup(m).then(() => onProgress(++done, movies.length))),
+    movies.map((m) =>
+      Promise.all([imdbLookup(m), rtLookup(m)]).then(() => onProgress(++done, movies.length)),
+    ),
   );
 }
 
@@ -312,6 +400,7 @@ function cachePath(cinemaId: string): string {
 function loadCache(cinemaId: string): CachePayload | null {
   try {
     const payload: CachePayload = JSON.parse(readFileSync(cachePath(cinemaId), "utf-8"));
+    if (payload.v !== CACHE_VERSION) return null;
     return isCacheFresh(payload, new Date()) ? payload : null;
   } catch {
     return null;
@@ -406,6 +495,118 @@ function showtimeStr(st: Showtime): string {
     ? `${A.red}${A.dim}${st.hour}✗${A.reset}`
     : `${A.cyan}${A.bold}${st.hour}${A.reset}`;
   return b ? `${hour}${A.dim}·${A.reset}${b}` : hour;
+}
+
+// ---------------------------------------------------------------------------
+// Rotten Tomatoes ANSI icons (terminal recreations of RT's icon set)
+// ---------------------------------------------------------------------------
+
+const RT_RED = "\x1b[38;2;250;60;45m";
+const RT_GREEN = "\x1b[38;2;110;190;60m"; // rotten splat
+const RT_LEAF = "\x1b[38;2;80;170;70m";
+const RT_GOLD = "\x1b[38;2;255;200;70m";
+const RT_TEAL_BG = "\x1b[48;2;35;150;140m";
+const RT_WHITE = "\x1b[38;2;245;245;240m";
+const R = A.reset;
+
+const ICON_W = 9; // every icon line is exactly this many visible columns
+
+// striped popcorn bucket row: alternating red/white columns
+const BUCKET =
+  ` ${RT_RED}▐${RT_WHITE}█${RT_RED}█${RT_WHITE}█${RT_RED}█${RT_WHITE}█${RT_RED}▌${R} `;
+
+export const RT_ICONS: Record<string, string[]> = {
+  certified: [
+    `${RT_GOLD}✦${R}  ${RT_LEAF}▗▟▖${R}  ${RT_GOLD}✦${R}`,
+    ` ${RT_RED}▄█████▄${R} `,
+    ` ${RT_RED}▜█████▛${R} `,
+    `${RT_GOLD}✦${R} ${RT_RED}▀███▀${R} ${RT_GOLD}✦${R}`,
+  ],
+  fresh: [
+    `   ${RT_LEAF}▗▟▖${R}   `,
+    ` ${RT_RED}▄█████▄${R} `,
+    ` ${RT_RED}▜█████▛${R} `,
+    `  ${RT_RED}▀███▀${R}  `,
+  ],
+  rotten: [
+    ` ${RT_GREEN}▝▚▟▙▞▘${R}  `,
+    ` ${RT_GREEN}▟█████▙${R} `,
+    ` ${RT_GREEN}▜█████▛${R} `,
+    ` ${RT_GREEN}▝▘▝▘▝▘${R}  `,
+  ],
+  verified: [
+    `  ${RT_GOLD}▚▙▟▞${R}   `,
+    BUCKET,
+    ` ${RT_RED}▐${RT_TEAL_BG}${RT_GOLD} HOT ${R}${RT_RED}▌${R} `,
+    `  ${RT_RED}▀████▀${R} `,
+  ],
+  upright: [
+    `  ${RT_GOLD}▚▙▟▞${R}   `,
+    BUCKET,
+    BUCKET,
+    `  ${RT_RED}▀████▀${R} `,
+  ],
+  spilled: [
+    `     ${RT_GOLD}∘ ∘${R} `,
+    ` ${RT_RED}▟███▙${R}${RT_GOLD}∘${R}  `,
+    ` ${RT_RED}▜███▛${R} ${RT_GOLD}∘${R} `,
+    `  ${RT_RED}▀▀▀${R}  ${RT_GOLD}∘${R} `,
+  ],
+};
+
+const RT_LABELS: Record<string, string> = {
+  certified: "Certified Fresh",
+  fresh: "Fresh",
+  rotten: "Rotten",
+  verified: "Verified Hot",
+  upright: "Hot",
+  spilled: "Spilled",
+};
+
+/** One meter (icon + score + labels) as 4 aligned lines. */
+function rtMeter(state: string, pct: number, meter: string, sub: string): string[] {
+  const icon = RT_ICONS[state];
+  return [
+    `${icon[0]}  ${A.bold}${pct}%${A.reset}`,
+    `${icon[1]}  ${A.grey}${meter} · ${RT_LABELS[state]}${A.reset}`,
+    `${icon[2]}  ${A.grey}${sub}${A.reset}`,
+    `${icon[3]}`,
+  ];
+}
+
+/** Rotten Tomatoes block for the detail view (side-by-side when it fits). */
+function rtBlock(m: Movie, width: number): string[] {
+  const rt = m.rt;
+  if (!rt) return [];
+  const cols: string[][] = [];
+  if (rt.critic !== null && rt.criticState)
+    cols.push(
+      rtMeter(rt.criticState, rt.critic, "Tomatometer", `${rt.criticCount.toLocaleString("en")} reviews`),
+    );
+  if (rt.audience !== null && rt.audienceState)
+    cols.push(
+      rtMeter(
+        rt.audienceState,
+        rt.audience,
+        "Popcornmeter",
+        `${rt.audienceCount.toLocaleString("en")}${rt.audienceState === "verified" ? " verified" : ""} ratings`,
+      ),
+    );
+  if (!cols.length) return [];
+  const COL_W = 36;
+  if (cols.length === 2 && width >= COL_W * 2) {
+    return cols[0].map(
+      (l, i) => l + " ".repeat(Math.max(1, COL_W - visLen(l))) + cols[1][i],
+    );
+  }
+  return cols.length === 2 ? [...cols[0], "", ...cols[1]] : cols[0];
+}
+
+/** Compact colored critic score for the grid ("82%" in RT red / rotten green). */
+function rtGridStr(m: Movie): string {
+  if (m.rt?.critic == null) return "";
+  const col = m.rt.criticState === "rotten" ? RT_GREEN : RT_RED;
+  return ` ${col}${m.rt.critic}%${A.reset}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -643,7 +844,7 @@ function cellText(idx: number, movie: Movie, selected: boolean): string {
   const marker = selected ? `${A.cyan}${A.bold}▸ ${A.reset}` : "  ";
   return (
     `\x1b[${pos.y + GRID_POSTER_ROWS};${pos.x}H${title}` +
-    `\x1b[${pos.y + GRID_POSTER_ROWS + 1};${pos.x}H${marker}${ratingStr(movie)} ${A.grey}${movie.minutes}′${A.reset}`
+    `\x1b[${pos.y + GRID_POSTER_ROWS + 1};${pos.x}H${marker}${ratingStr(movie)}${rtGridStr(movie)} ${A.grey}${movie.minutes}′${A.reset}`
   );
 }
 
@@ -749,6 +950,11 @@ async function renderDetail() {
   const lines: string[] = [];
   lines.push(`${A.bold}${m.title}${A.reset}  ${ratingStr(m)}${m.votes ? ` ${A.grey}(${m.votes.toLocaleString("en")} votes)${A.reset}` : ""}`);
   lines.push(`${A.grey}${m.minutes}′ · ${m.genre}${m.pg ? ` · ${m.pg}` : ""}${A.reset}`);
+  const rtLines = rtBlock(m, textW);
+  if (rtLines.length) {
+    lines.push("");
+    lines.push(...rtLines);
+  }
   lines.push("");
   const plot = m.imdbPlot || m.plot;
   if (plot) {
@@ -765,6 +971,7 @@ async function renderDetail() {
   }
   lines.push("");
   if (m.imdbUrl) lines.push(`${A.grey}imdb     ${m.imdbUrl}${A.reset}`);
+  if (m.rt?.url) lines.push(`${A.grey}rotten   ${m.rt.url}${A.reset}`);
   if (m.trailer) lines.push(`${A.grey}trailer  ${m.trailer}${A.reset}`);
   if (m.url) lines.push(`${A.grey}book     ${m.url}${A.reset}`);
 
@@ -825,6 +1032,7 @@ async function loadData(cinemaId: string, force: boolean) {
     state.movies = movies;
     sortMovies();
     saveCache({
+      v: CACHE_VERSION,
       cachedAt: new Date().toISOString(),
       cinemaId,
       cinemaName,
@@ -931,7 +1139,8 @@ function printPlain(day: string) {
   if (!entries.length) return console.log("No screenings.");
   for (const { movie, times } of entries) {
     const rating = movie.rating === null ? "?" : movie.rating.toFixed(1);
-    console.log(`${movie.title} (${rating}) ${movie.minutes}′`);
+    const rt = movie.rt?.critic != null ? ` RT ${movie.rt.critic}%` : "";
+    console.log(`${movie.title} (${rating}${rt}) ${movie.minutes}′`);
     console.log(`  ${times.map((t) => t.hour + (t.soldout ? "(soldout)" : "")).join("  ")}`);
   }
 }
@@ -1027,7 +1236,7 @@ async function loadDataPlain(cinemaId: string, force: boolean) {
     state.cinemaName = cinemaName;
     await enrich(movies, () => {});
     state.movies = movies;
-    saveCache({ cachedAt: new Date().toISOString(), cinemaId, cinemaName, movies });
+    saveCache({ v: CACHE_VERSION, cachedAt: new Date().toISOString(), cinemaId, cinemaName, movies });
   }
   sortMovies();
   computeDayList();

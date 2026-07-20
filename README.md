@@ -13,8 +13,10 @@
 
 `cine` shows what's playing at your Village cinema as a wall of movie posters,
 sorted by IMDB rating, in a full-screen TUI. Arrow around the grid, hit ⏎ for
-the detail view — plot, every day's showtimes, and the poster up close. Images
-render natively in your terminal (Kitty graphics protocol in
+the detail view — plot, every day's showtimes, the poster up close, and
+Rotten Tomatoes scores with ANSI recreations of the real icons (Certified
+Fresh, fresh tomato, rotten splat, Verified Hot, popcorn bucket, spilled
+bucket). Images render natively in your terminal (Kitty graphics protocol in
 Ghostty/kitty/WezTerm, half-block mosaic anywhere else). It remembers your
 cinema, caches for 12 hours, and opens trailers and booking pages straight in
 the browser.

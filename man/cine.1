@@ -6,8 +6,11 @@ cine \- Village Cinemas (Greece) showtimes with IMDB ratings and posters
 [\fIoptions\fR]
 .SH DESCRIPTION
 Scrapes villagecinemas.gr for what's currently playing, enriches every movie
-with its IMDB rating and plot, and shows everything as a poster grid sorted
-by rating. Posters render inline via the Kitty graphics protocol (Ghostty,
+with its IMDB rating and plot plus Rotten Tomatoes critic (Tomatometer) and
+audience (Popcornmeter) scores, and shows everything as a poster grid sorted
+by IMDB rating. RT states render as ANSI icons in the detail view
+(Certified Fresh, Fresh, Rotten, Verified Hot, upright or spilled popcorn).
+Posters render inline via the Kitty graphics protocol (Ghostty,
 kitty, WezTerm) with a half-block fallback for other terminals, converted
 with
 .BR sips (1).
