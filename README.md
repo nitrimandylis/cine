@@ -11,12 +11,13 @@
   <img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="MIT" />
 </p>
 
-`cine` shows what's playing at your Village cinema, sorted by IMDB rating, in a
-full-screen TUI. Arrow through movies and days, hit ⏎ for the detail view —
-plot, all showtimes, and the actual movie poster rendered in your terminal
-(Kitty graphics protocol in Ghostty/kitty/WezTerm, half-block mosaic anywhere
-else). It remembers your cinema, caches for 12 hours, and opens trailers and
-booking pages straight in the browser.
+`cine` shows what's playing at your Village cinema as a wall of movie posters,
+sorted by IMDB rating, in a full-screen TUI. Arrow around the grid, hit ⏎ for
+the detail view — plot, every day's showtimes, and the poster up close. Images
+render natively in your terminal (Kitty graphics protocol in
+Ghostty/kitty/WezTerm, half-block mosaic anywhere else). It remembers your
+cinema, caches for 12 hours, and opens trailers and booking pages straight in
+the browser.
 
 A TypeScript rewrite of [village_crawler](https://github.com/johneliades/village_crawler),
 reshaped into an interactive TUI.
@@ -35,9 +36,8 @@ man cine          # full reference, offline
 
 | Key | Action |
 |-----|--------|
-| `↑` `↓` | move between movies |
-| `←` `→` | change day |
-| `⏎` | detail view — poster, plot, every showtime |
+| `↑` `↓` `←` `→` | move around the poster grid |
+| `⏎` | detail view — poster, plot, every day's showtimes |
 | `t` | open trailer in browser |
 | `b` | open booking page |
 | `p` | ticket price table |

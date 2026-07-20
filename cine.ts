@@ -58,14 +58,14 @@ const HELP = `cine — Village Cinemas (Greece) showtimes with IMDB ratings and 
 usage:
   cine                 interactive TUI (remembers your cinema)
   cine -c 21           jump straight to a cinema by ID
-  cine -d 25/07        open on a specific date (DD/MM)
+  cine -d 25/07        filter piped output to a date (DD/MM)
   cine --list          list cinema IDs and exit
   cine --clear         clear the cache for your cinema, then fetch fresh
   cine --no-cache      ignore the cache, always fetch fresh
 
 keys (inside the TUI):
-  ↑/↓ move   ←/→ change day   ⏎ details   t trailer   b book
-  p prices   c switch cinema  r refresh   q quit
+  ↑/↓/←/→ move around the poster grid   ⏎ details   t trailer   b book
+  p prices   c switch cinema   r refresh   q quit
 
 piped output (cine | cat) prints a plain list instead of the TUI.`;
 
@@ -452,23 +452,36 @@ async function ensurePoster(movie: Movie): Promise<string | null> {
   }
 }
 
-/** Emit a poster at (row,col) spanning `rows` terminal rows. Returns cell width used. */
-function drawPosterKitty(png: string, row: number, col: number, rows: number): number {
-  const size = pngSize(png);
-  // ponytail: assumes ~1:2 cell aspect; exact cell metrics would need a terminal query
-  const cols = size ? Math.max(1, Math.round((rows * 2 * size.w) / size.h)) : rows;
+/** Cell width a poster occupies at a given row height (assumes ~1:2 cell aspect). */
+function posterCellCols(png: string | null, rows: number): number {
+  // ponytail: exact cell metrics would need a terminal query; 712x980 is Village's poster ratio
+  const size = png ? pngSize(png) : null;
+  const [w, h] = size ? [size.w, size.h] : [712, 980];
+  return Math.max(1, Math.round((rows * 2 * w) / h));
+}
+
+const kittyTransferred = new Set<number>();
+
+/** Upload a PNG to the terminal once under a numeric image id (no placement). */
+function kittyTransfer(png: string, id: number) {
+  if (kittyTransferred.has(id)) return;
   const data = readFileSync(png).toString("base64");
-  let out = `\x1b[${row};${col}H`;
+  let out = "";
   for (let i = 0; i < data.length; i += 4096) {
     const chunk = data.slice(i, i + 4096);
-    const isFirst = i === 0;
-    const isLast = i + 4096 >= data.length;
-    const ctrl = isFirst ? `f=100,a=T,C=1,q=2,r=${rows},c=${cols},m=${isLast ? 0 : 1}` : `m=${isLast ? 0 : 1}`;
+    const ctrl = i === 0 ? `f=100,a=t,q=2,i=${id},m=${i + 4096 >= data.length ? 0 : 1}` : `m=${i + 4096 >= data.length ? 0 : 1}`;
     out += `\x1b_G${ctrl};${chunk}\x1b\\`;
   }
   process.stdout.write(out);
-  return cols;
+  kittyTransferred.add(id);
 }
+
+/** Place an already-transferred image at (row,col), scaled into rows×cols cells. */
+function kittyPlace(id: number, row: number, col: number, rows: number, cols: number) {
+  process.stdout.write(`\x1b[${row};${col}H\x1b_Ga=p,i=${id},q=2,C=1,r=${rows},c=${cols}\x1b\\`);
+}
+
+const halfblockCache = new Map<string, string[]>();
 
 /** Parse an uncompressed 24/32-bit BMP into a pixel getter. */
 export function parseBmp(buf: Buffer): { w: number; h: number; px: (x: number, y: number) => [number, number, number] } {
@@ -486,8 +499,11 @@ export function parseBmp(buf: Buffer): { w: number; h: number; px: (x: number, y
   return { w, h, px };
 }
 
-/** Render the poster as half-block truecolor lines (any terminal). */
+/** Render the poster as half-block truecolor lines (any terminal). Cached. */
 function posterHalfblockLines(png: string, rows: number): string[] {
+  const key = `${png}:${rows}`;
+  const hit = halfblockCache.get(key);
+  if (hit) return hit;
   const size = pngSize(png);
   if (!size) return [];
   const cols = Math.max(1, Math.round((rows * 2 * size.w) / size.h));
@@ -506,6 +522,7 @@ function posterHalfblockLines(png: string, rows: number): string[] {
       }
       lines.push(line + A.reset);
     }
+    halfblockCache.set(key, lines);
     return lines;
   } catch {
     return [];
@@ -527,12 +544,21 @@ const state = {
   dayList: [] as string[],
   dayIdx: 0,
   sel: 0,
+  perRow: 1,
   view: "list" as View,
   showPrices: false,
   cinemaSel: 0,
   status: "",
   detailToken: 0,
+  posterPaths: new Map<string, string | null>(),
 };
+
+const imgIds = new Map<string, number>();
+
+function imgId(movieId: string): number {
+  if (!imgIds.has(movieId)) imgIds.set(movieId, imgIds.size + 1);
+  return imgIds.get(movieId)!;
+}
 
 function out(s: string) {
   process.stdout.write(s);
@@ -560,6 +586,12 @@ function moviesForDay(day: string): { movie: Movie; times: Showtime[] }[] {
   return rows;
 }
 
+/** All movies with at least one upcoming screening (grid order = rating desc). */
+function gridMovies(): Movie[] {
+  const today = isoDay(new Date());
+  return state.movies.filter((m) => Object.keys(m.days).some((d) => d >= today));
+}
+
 function computeDayList() {
   const today = isoDay(new Date());
   const days = new Set<string>();
@@ -580,13 +612,13 @@ function renderStatus(msg: string) {
 }
 
 function header(cols: number): string {
-  const today = isoDay(new Date());
-  const day = fmtDay(currentDay(), today);
   const left = ` ${A.bold}${A.cyan}CINE${A.reset}  ${A.bold}${state.cinemaName}${A.reset}`;
-  const mid = `${A.dim}◂${A.reset} ${A.bold}${day}${A.reset} ${A.dim}▸${A.reset}`;
-  const pad = Math.max(1, cols - visLen(left) - visLen(mid) - 2);
-  return left + " ".repeat(pad) + mid + "\n" + A.grey + "─".repeat(cols) + A.reset + "\n";
+  const right = `${A.grey}${gridMovies().length} movies · sorted by IMDB${A.reset}`;
+  const pad = Math.max(1, cols - visLen(left) - visLen(right) - 2);
+  return left + " ".repeat(pad) + right + "\n" + A.grey + "─".repeat(cols) + A.reset + "\n";
 }
+
+const GRID_POSTER_ROWS = 11;
 
 function renderList() {
   clearScreen();
@@ -594,29 +626,58 @@ function renderList() {
   const rows = process.stdout.rows || 24;
   let buf = header(cols);
 
-  const entries = moviesForDay(currentDay());
-  if (state.sel >= entries.length) state.sel = Math.max(0, entries.length - 1);
+  const list = gridMovies();
+  if (state.sel >= list.length) state.sel = Math.max(0, list.length - 1);
+  if (!list.length) buf += "\n" + center(`${A.dim}No upcoming screenings.${A.reset}`, cols);
 
-  const perMovie = 3; // title line + times line + blank
-  const viewport = Math.max(1, Math.floor((rows - 5) / perMovie));
-  const scroll = Math.max(0, Math.min(state.sel - viewport + 1, entries.length - viewport));
+  const pCols = posterCellCols(null, GRID_POSTER_ROWS);
+  const cellW = pCols + 3; // poster + gap
+  const cellH = GRID_POSTER_ROWS + 3; // poster + title + meta + gap
+  const perRow = Math.max(1, Math.floor((cols - 2) / cellW));
+  state.perRow = perRow;
+  const viewRows = Math.max(1, Math.floor((rows - 4) / cellH));
+  const totalRows = Math.ceil(list.length / perRow);
+  const selRow = Math.floor(state.sel / perRow);
+  const scroll = Math.max(0, Math.min(selRow - viewRows + 1, totalRows - viewRows));
 
-  if (!entries.length) {
-    buf += "\n" + center(`${A.dim}No screenings on this day.${A.reset}`, cols);
+  const useKitty = kittySupported();
+  const placements: { png: string; id: number; y: number; x: number }[] = [];
+
+  for (let i = 0; i < viewRows * perRow; i++) {
+    const idx = (scroll + Math.floor(i / perRow)) * perRow + (i % perRow);
+    const movie = list[idx];
+    if (!movie) break;
+    const y = 3 + Math.floor(i / perRow) * cellH;
+    const x = 2 + (i % perRow) * cellW;
+    const selected = idx === state.sel;
+    const png = state.posterPaths.get(movie.id) ?? null;
+
+    if (png && useKitty) {
+      placements.push({ png, id: imgId(movie.id), y, x });
+    } else if (png) {
+      posterHalfblockLines(png, GRID_POSTER_ROWS).forEach((line, li) => {
+        buf += `\x1b[${y + li};${x}H${line}`;
+      });
+    } else {
+      buf += `\x1b[${y + Math.floor(GRID_POSTER_ROWS / 2)};${x}H${A.grey}${center("(no poster)", pCols)}${A.reset}`;
+    }
+
+    const titleRaw = truncate(movie.title, pCols);
+    const titlePad = titleRaw + " ".repeat(Math.max(0, pCols - visLen(titleRaw)));
+    const title = selected ? `${A.inv}${A.bold}${titlePad}${A.reset}` : `${A.bold}${titlePad}${A.reset}`;
+    buf += `\x1b[${y + GRID_POSTER_ROWS};${x}H${title}`;
+    const marker = selected ? `${A.cyan}${A.bold}▸ ${A.reset}` : "";
+    buf += `\x1b[${y + GRID_POSTER_ROWS + 1};${x}H${marker}${ratingStr(movie)} ${A.grey}${movie.minutes}′${A.reset}`;
   }
 
-  entries.slice(scroll, scroll + viewport).forEach(({ movie, times }, i) => {
-    const selected = scroll + i === state.sel;
-    const mark = selected ? `${A.cyan}${A.bold}▌ ` : "  ";
-    const meta = `${A.grey}${movie.minutes}′ · ${movie.genre}${A.reset}`;
-    const line1 = `${mark}${selected ? A.bold : ""}${movie.title}${A.reset}  ${ratingStr(movie)}  ${meta}`;
-    const line2 = "    " + times.map(showtimeStr).join("  ");
-    buf += truncate(line1, cols - 1) + "\n" + truncate(line2, cols - 1) + "\n\n";
-  });
-
-  const hints = ` ↑↓ move · ←→ day · ⏎ details · t trailer · b book · p prices · c cinema · r refresh · q quit`;
+  const hints = ` ↑↓←→ move · ⏎ details · t trailer · b book · p prices · c cinema · r refresh · q quit`;
   buf += `\x1b[${rows};1H${A.grey}${truncate(hints, cols - 1)}${A.reset}`;
   out(buf);
+
+  for (const p of placements) {
+    kittyTransfer(p.png, p.id);
+    kittyPlace(p.id, p.y, p.x, GRID_POSTER_ROWS, pCols);
+  }
 
   if (state.showPrices) renderPrices(cols, rows);
 }
@@ -633,13 +694,11 @@ async function renderDetail() {
   clearScreen();
   const cols = process.stdout.columns || 80;
   const rows = process.stdout.rows || 24;
-  const entries = moviesForDay(currentDay());
-  const entry = entries[state.sel];
-  if (!entry) {
+  const m = gridMovies()[state.sel];
+  if (!m) {
     state.view = "list";
     return renderList();
   }
-  const m = entry.movie;
   const token = ++state.detailToken;
 
   const posterRows = Math.min(rows - 8, 18);
@@ -680,11 +739,12 @@ async function renderDetail() {
   buf += `\x1b[${rows};1H${A.grey}${hints}${A.reset}`;
   out(buf);
 
-  const png = await ensurePoster(m);
+  const png = state.posterPaths.get(m.id) ?? (await ensurePoster(m));
   if (token !== state.detailToken || state.view !== "detail") return;
   if (png) {
     if (useKitty) {
-      drawPosterKitty(png, 4, 3, posterRows);
+      kittyTransfer(png, imgId(m.id));
+      kittyPlace(imgId(m.id), 4, 3, posterRows, posterCellCols(png, posterRows));
     } else {
       posterHalfblockLines(png, posterRows).forEach((line, i) => {
         out(`\x1b[${4 + i};3H${line}`);
@@ -739,6 +799,19 @@ async function loadData(cinemaId: string, force: boolean) {
   sortMovies();
   computeDayList();
   state.sel = 0;
+
+  // prefetch posters so the grid appears fully drawn (cached files return instantly)
+  const list = gridMovies();
+  let done = 0;
+  renderStatus(`Fetching posters… 0/${list.length}`);
+  await Promise.all(
+    list.map((m) =>
+      ensurePoster(m).then((png) => {
+        state.posterPaths.set(m.id, png);
+        renderStatus(`Fetching posters… ${++done}/${list.length}`);
+      }),
+    ),
+  );
 }
 
 function openUrl(url: string) {
@@ -756,8 +829,8 @@ function quit(): never {
 }
 
 async function handleKey(key: string) {
-  const entries = moviesForDay(currentDay());
-  const selMovie = entries[state.sel]?.movie;
+  const list = gridMovies();
+  const selMovie = list[state.sel];
 
   if (key === "\x03" || key === "q") quit();
 
@@ -795,22 +868,22 @@ async function handleKey(key: string) {
     await loadData(state.cinemaId, true);
     return render();
   }
+  const last = Math.max(0, list.length - 1);
+  const step = state.view === "list" ? state.perRow : 1; // detail: ↑↓ step one movie
   if (key === "\x1b[C") {
-    state.dayIdx = Math.min(state.dayIdx + 1, state.dayList.length - 1);
-    state.sel = 0;
+    state.sel = Math.min(last, state.sel + 1);
     return render();
   }
   if (key === "\x1b[D") {
-    state.dayIdx = Math.max(state.dayIdx - 1, 0);
-    state.sel = 0;
-    return render();
-  }
-  if (key === "\x1b[A") {
     state.sel = Math.max(0, state.sel - 1);
     return render();
   }
+  if (key === "\x1b[A") {
+    state.sel = Math.max(0, state.sel - step);
+    return render();
+  }
   if (key === "\x1b[B") {
-    state.sel = Math.min(Math.max(0, entries.length - 1), state.sel + 1);
+    state.sel = Math.min(last, state.sel + step);
     return render();
   }
   if (key === "\r") {
