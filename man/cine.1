@@ -1,0 +1,72 @@
+.TH CINE 1 "2026-07-20" "cine 0.1.0" "User Commands"
+.SH NAME
+cine \- Village Cinemas (Greece) showtimes with IMDB ratings and posters
+.SH SYNOPSIS
+.B cine
+[\fIoptions\fR]
+.SH DESCRIPTION
+Scrapes villagecinemas.gr for what's currently playing, enriches every movie
+with its IMDB rating and plot, and shows everything in an interactive
+terminal UI sorted by rating. Movie posters render inline via the Kitty
+graphics protocol (Ghostty, kitty, WezTerm) with a half-block fallback for
+other terminals, converted with
+.BR sips (1).
+Results are cached for 12 hours. The chosen cinema is remembered between
+runs. When output is piped, a plain text list is printed instead of the TUI.
+.SH OPTIONS
+.TP
+.BR \-c ", " \-\-cinema " " \fIid\fR
+Jump straight to a cinema by ID (see \fB\-\-list\fR).
+.TP
+.BR \-d ", " \-\-date " " \fIDD/MM\fR
+Open on a specific date.
+.TP
+.B \-\-list
+List available cinema IDs and exit.
+.TP
+.B \-\-clear
+Clear the cache for the selected cinema before fetching.
+.TP
+.B \-\-no\-cache
+Ignore the cache and always fetch fresh data.
+.TP
+.BR \-h ", " \-\-help
+Show help.
+.SH KEYS
+.TP
+.B up/down
+Move between movies.
+.TP
+.B left/right
+Change day.
+.TP
+.B enter
+Open the movie's detail view (poster, plot, all showtimes).
+.TP
+.B t
+Open the trailer in the browser.
+.TP
+.B b
+Open the booking page in the browser.
+.TP
+.B p
+Toggle the ticket price table.
+.TP
+.B c
+Switch cinema (saved as the new default).
+.TP
+.B r
+Refresh, ignoring the cache.
+.TP
+.B q / esc
+Quit / go back.
+.SH FILES
+.TP
+.I ~/.config/cine/config.json
+Remembered default cinema.
+.TP
+.I ~/.cache/cine/
+Cached showtimes (12 h TTL) and posters.
+.SH SEE ALSO
+.BR sips (1),
+.BR open (1)

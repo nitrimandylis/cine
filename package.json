@@ -1,0 +1,11 @@
+{
+  "name": "cine",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "bin": { "cine": "./cine.ts" },
+  "scripts": {
+    "compile": "bun build --compile cine.ts --outfile ~/.bun/bin/cine && mkdir -p $(brew --prefix)/share/man/man1 && cp man/cine.1 $(brew --prefix)/share/man/man1/"
+  },
+  "devDependencies": { "@types/bun": "^1.3.14" }
+}
