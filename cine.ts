@@ -114,7 +114,7 @@ export type Movie = {
   rt: RtScores | null;
 };
 
-const CACHE_VERSION = 2; // bump when Movie shape changes so stale caches refetch
+const CACHE_VERSION = 3; // bump when Movie shape/enrichment changes so stale caches refetch
 
 type CachePayload = {
   v?: number;
@@ -278,17 +278,18 @@ async function fetchVillage(cinemaId: string): Promise<{ cinemaName: string; mov
 // IMDB enrichment (keyless: suggestion API + public GraphQL endpoint)
 // ---------------------------------------------------------------------------
 
-async function imdbLookup(movie: Movie): Promise<void> {
+/** Enrich from IMDB; returns the canonical (English) title when matched. */
+async function imdbLookup(movie: Movie): Promise<string | null> {
   try {
     const q = movie.title.toLowerCase().trim();
     const first = q.replace(/[^a-z0-9]/g, "")[0] ?? "x";
     const res = await fetch(`${IMDB_SUGGEST}/${first}/${encodeURIComponent(q)}.json`, {
       headers: { "User-Agent": UA },
     });
-    if (!res.ok) return;
+    if (!res.ok) return null;
     const hits: Suggestion[] = (await res.json()).d ?? [];
     const match = pickImdbMatch(hits, new Date().getFullYear());
-    if (!match) return;
+    if (!match) return null;
 
     const gql = await fetch(IMDB_GRAPHQL, {
       method: "POST",
@@ -301,16 +302,18 @@ async function imdbLookup(movie: Movie): Promise<void> {
         } }`,
       }),
     });
-    if (!gql.ok) return;
+    if (!gql.ok) return match.l ?? null;
     const t = (await gql.json()).data?.title;
-    if (!t) return;
+    if (!t) return match.l ?? null;
     movie.rating = t.ratingsSummary?.aggregateRating ?? null;
     movie.votes = t.ratingsSummary?.voteCount ?? 0;
     movie.imdbUrl = `https://www.imdb.com/title/${match.id}/`;
     movie.imdbPlot = t.plot?.plotText?.plainText ?? "";
     movie.imdbPoster = t.primaryImage?.url ?? "";
+    return match.l ?? null;
   } catch {
     // no IMDB data — the movie just shows "?" for its rating
+    return null;
   }
 }
 
@@ -318,14 +321,29 @@ async function imdbLookup(movie: Movie): Promise<void> {
 // Rotten Tomatoes enrichment (server-rendered search page + scorecard JSON)
 // ---------------------------------------------------------------------------
 
-/** Pick the best /m/ movie URL from RT's search page HTML (prefers recent). */
-export function parseRtSearch(html: string, nowYear: number): string | null {
+function normTitle(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+/**
+ * Pick the best /m/ movie URL from RT's search page HTML.
+ * Only accepts results whose name actually matches the query (RT search
+ * happily returns unrelated movies), preferring recent releases.
+ */
+export function parseRtSearch(html: string, nowYear: number, query: string): string | null {
   const rows = html.match(/<search-page-media-row[\s\S]*?<\/search-page-media-row>/g) ?? [];
+  const q = normTitle(query);
   const candidates: { url: string; year: number }[] = [];
   for (const row of rows) {
     const url = row.match(/href="(https:\/\/www\.rottentomatoes\.com\/m\/[^"]+)"/)?.[1];
     const year = parseInt(row.match(/release-year="(\d*)"/)?.[1] ?? "", 10) || 0;
-    if (url) candidates.push({ url, year });
+    if (!url) continue;
+    const name = normTitle(stripHtml(row));
+    if (!q || !name.includes(q)) continue;
+    candidates.push({ url, year });
   }
   return (candidates.find((c) => c.year >= nowYear - 1) ?? candidates[0])?.url ?? null;
 }
@@ -363,20 +381,27 @@ export function parseRtScorecard(html: string, url: string): RtScores | null {
   };
 }
 
-async function rtLookup(movie: Movie): Promise<void> {
-  try {
-    const q = encodeURIComponent(movie.title.toLowerCase().trim());
-    const search = await fetch(`https://www.rottentomatoes.com/search?search=${q}`, {
-      headers: { "User-Agent": UA },
-    });
-    if (!search.ok) return;
-    const url = parseRtSearch(await search.text(), new Date().getFullYear());
-    if (!url) return;
-    const page = await fetch(url, { headers: { "User-Agent": UA } });
-    if (!page.ok) return;
-    movie.rt = parseRtScorecard(await page.text(), url);
-  } catch {
-    // no RT data — the movie just shows nothing for RT
+/** Try RT with each candidate title (canonical IMDB title first — Village
+ *  titles are often localized, e.g. VAIANA for Moana, which RT can't find). */
+async function rtLookup(movie: Movie, canonicalTitle: string | null): Promise<void> {
+  const villageTitle = movie.title.replace(/\(.*?\)/g, "").trim(); // drop "(DUBBED...)" etc.
+  const queries = [...new Set([canonicalTitle, villageTitle].filter(Boolean))] as string[];
+  for (const title of queries) {
+    try {
+      const q = encodeURIComponent(title.toLowerCase().trim());
+      const search = await fetch(`https://www.rottentomatoes.com/search?search=${q}`, {
+        headers: { "User-Agent": UA },
+      });
+      if (!search.ok) continue;
+      const url = parseRtSearch(await search.text(), new Date().getFullYear(), title);
+      if (!url) continue;
+      const page = await fetch(url, { headers: { "User-Agent": UA } });
+      if (!page.ok) continue;
+      movie.rt = parseRtScorecard(await page.text(), url);
+      if (movie.rt) return;
+    } catch {
+      // try the next title, or leave rt empty
+    }
   }
 }
 
@@ -384,7 +409,9 @@ async function enrich(movies: Movie[], onProgress: (done: number, total: number)
   let done = 0;
   await Promise.all(
     movies.map((m) =>
-      Promise.all([imdbLookup(m), rtLookup(m)]).then(() => onProgress(++done, movies.length)),
+      imdbLookup(m)
+        .then((canonical) => rtLookup(m, canonical))
+        .then(() => onProgress(++done, movies.length)),
     ),
   );
 }

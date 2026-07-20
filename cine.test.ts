@@ -136,17 +136,25 @@ test("every RT icon line is exactly 9 visible columns", () => {
   }
 });
 
-test("parseRtSearch prefers recent releases", () => {
-  const row = (url: string, year: number) =>
-    `<search-page-media-row release-year="${year}"><a href="${url}">x</a></search-page-media-row>`;
+test("parseRtSearch prefers recent releases and requires a name match", () => {
+  const row = (url: string, year: number, name: string) =>
+    `<search-page-media-row release-year="${year}"><a href="${url}">${name}</a></search-page-media-row>`;
   const html =
-    row("https://www.rottentomatoes.com/m/the_odyssey_1997", 1997) +
-    row("https://www.rottentomatoes.com/m/the_odyssey_2026", 2026);
-  expect(parseRtSearch(html, 2026)).toBe("https://www.rottentomatoes.com/m/the_odyssey_2026");
-  expect(parseRtSearch(row("https://www.rottentomatoes.com/m/old_movie", 1997), 2026)).toBe(
-    "https://www.rottentomatoes.com/m/old_movie",
+    row("https://www.rottentomatoes.com/m/the_odyssey_1997", 1997, "The Odyssey") +
+    row("https://www.rottentomatoes.com/m/the_odyssey_2026", 2026, "The Odyssey");
+  expect(parseRtSearch(html, 2026, "The Odyssey")).toBe(
+    "https://www.rottentomatoes.com/m/the_odyssey_2026",
   );
-  expect(parseRtSearch("<html>no rows</html>", 2026)).toBe(null);
+  expect(
+    parseRtSearch(row("https://www.rottentomatoes.com/m/old_movie", 1997, "Old Movie"), 2026, "old movie"),
+  ).toBe("https://www.rottentomatoes.com/m/old_movie");
+  // unrelated results are rejected even when they're the right year (VAIANA case)
+  const unrelated =
+    row("https://www.rottentomatoes.com/m/varanasi", 2027, "Varanasi") +
+    row("https://www.rottentomatoes.com/m/moana_2016", 2016, "Moana");
+  expect(parseRtSearch(unrelated, 2026, "vaiana")).toBe(null);
+  expect(parseRtSearch(unrelated, 2026, "Moana")).toBe("https://www.rottentomatoes.com/m/moana_2016");
+  expect(parseRtSearch("<html>no rows</html>", 2026, "x")).toBe(null);
 });
 
 test("parseRtScorecard maps scores and icon states", () => {
