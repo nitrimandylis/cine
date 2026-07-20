@@ -509,48 +509,48 @@ const RT_TEAL_BG = "\x1b[48;2;35;150;140m";
 const RT_WHITE = "\x1b[38;2;245;245;240m";
 const R = A.reset;
 
-const ICON_W = 9; // every icon line is exactly this many visible columns
-
-// striped popcorn bucket row: alternating red/white columns
+// striped popcorn bucket rows: alternating red/white text columns
 const BUCKET =
-  ` ${RT_RED}▐${RT_WHITE}█${RT_RED}█${RT_WHITE}█${RT_RED}█${RT_WHITE}█${RT_RED}▌${R} `;
+  ` ${RT_RED}|${RT_WHITE}=${RT_RED}|${RT_WHITE}=${RT_RED}|${RT_WHITE}=${RT_RED}|${R} `;
+const BUCKET_TIPPED = `${RT_RED}\\${RT_WHITE}=${RT_RED}\\${RT_WHITE}=${RT_RED}\\${R}`;
 
+// text-character recreations of RT's icon set, each line 9 visible columns
 export const RT_ICONS: Record<string, string[]> = {
   certified: [
-    `${RT_GOLD}✦${R}  ${RT_LEAF}▗▟▖${R}  ${RT_GOLD}✦${R}`,
-    ` ${RT_RED}▄█████▄${R} `,
-    ` ${RT_RED}▜█████▛${R} `,
-    `${RT_GOLD}✦${R} ${RT_RED}▀███▀${R} ${RT_GOLD}✦${R}`,
+    `${RT_GOLD}*${R}  ${RT_LEAF}\\|/${R}  ${RT_GOLD}*${R}`,
+    `  ${RT_RED}.---.${R}  `,
+    ` ${RT_RED}(     )${R} `,
+    `${RT_GOLD}*${R} ${RT_RED}'---'${R} ${RT_GOLD}*${R}`,
   ],
   fresh: [
-    `   ${RT_LEAF}▗▟▖${R}   `,
-    ` ${RT_RED}▄█████▄${R} `,
-    ` ${RT_RED}▜█████▛${R} `,
-    `  ${RT_RED}▀███▀${R}  `,
+    `   ${RT_LEAF}\\|/${R}   `,
+    `  ${RT_RED}.---.${R}  `,
+    ` ${RT_RED}(     )${R} `,
+    `  ${RT_RED}'---'${R}  `,
   ],
   rotten: [
-    ` ${RT_GREEN}▝▚▟▙▞▘${R}  `,
-    ` ${RT_GREEN}▟█████▙${R} `,
-    ` ${RT_GREEN}▜█████▛${R} `,
-    ` ${RT_GREEN}▝▘▝▘▝▘${R}  `,
+    `  ${RT_GREEN}. , .${R}  `,
+    ` ${RT_GREEN}(,'~',)${R} `,
+    ` ${RT_GREEN}',~.~,'${R} `,
+    `  ${RT_GREEN}'   '${R}  `,
   ],
   verified: [
-    `  ${RT_GOLD}▚▙▟▞${R}   `,
+    `  ${RT_GOLD}*.*.*${R}  `,
     BUCKET,
-    ` ${RT_RED}▐${RT_TEAL_BG}${RT_GOLD} HOT ${R}${RT_RED}▌${R} `,
-    `  ${RT_RED}▀████▀${R} `,
+    ` ${RT_RED}|${RT_TEAL_BG}${RT_GOLD} HOT ${R}${RT_RED}|${R} `,
+    `  ${RT_RED}\\___/${R}  `,
   ],
   upright: [
-    `  ${RT_GOLD}▚▙▟▞${R}   `,
+    `  ${RT_GOLD}*.*.*${R}  `,
     BUCKET,
     BUCKET,
-    `  ${RT_RED}▀████▀${R} `,
+    `  ${RT_RED}\\___/${R}  `,
   ],
   spilled: [
-    `     ${RT_GOLD}∘ ∘${R} `,
-    ` ${RT_RED}▟███▙${R}${RT_GOLD}∘${R}  `,
-    ` ${RT_RED}▜███▛${R} ${RT_GOLD}∘${R} `,
-    `  ${RT_RED}▀▀▀${R}  ${RT_GOLD}∘${R} `,
+    `      ${RT_GOLD}o o${R}`,
+    ` ${BUCKET_TIPPED} ${RT_GOLD}o${R} `,
+    `  ${BUCKET_TIPPED}${RT_GOLD}.${R} `,
+    `   ${RT_RED}\\__\\${R}  `,
   ],
 };
 
@@ -593,11 +593,11 @@ function rtBlock(m: Movie, width: number): string[] {
       ),
     );
   if (!cols.length) return [];
-  const COL_W = 36;
-  if (cols.length === 2 && width >= COL_W * 2) {
-    return cols[0].map(
-      (l, i) => l + " ".repeat(Math.max(1, COL_W - visLen(l))) + cols[1][i],
-    );
+  // pad to the widest left line so the right column starts at one fixed x
+  const leftW = Math.max(...cols[0].map(visLen)) + 3;
+  const rightW = cols.length === 2 ? Math.max(...cols[1].map(visLen)) : 0;
+  if (cols.length === 2 && width >= leftW + rightW) {
+    return cols[0].map((l, i) => l + " ".repeat(leftW - visLen(l)) + cols[1][i]);
   }
   return cols.length === 2 ? [...cols[0], "", ...cols[1]] : cols[0];
 }
