@@ -1,91 +1,94 @@
-<h1 align="center">🎬 cine</h1>
+```
+  ██████╗██╗███╗   ██╗███████╗
+ ██╔════╝██║████╗  ██║██╔════╝
+ ██║     ██║██╔██╗ ██║█████╗
+ ██║     ██║██║╚██╗██║██╔══╝
+ ╚██████╗██║██║ ╚████║███████╗
+  ╚═════╝╚═╝╚═╝  ╚═══╝╚══════╝
+```
 
-<p align="center">
-  Village Cinemas (Greece) showtimes in your terminal — IMDB ratings, real posters, zero dependencies.
-</p>
+<div align="center">
 
-<p align="center">
-  <img src="https://img.shields.io/badge/runtime-bun-f9f1e1" alt="bun" />
-  <img src="https://img.shields.io/badge/dependencies-0-brightgreen" alt="zero deps" />
-  <img src="https://img.shields.io/badge/platform-macOS-blue" alt="macOS" />
-  <img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="MIT" />
-</p>
+### `EVERY MOVIE IN ATHENS // SORTED BY WHETHER IT'S ANY GOOD`
 
-`cine` shows what's playing at your Village cinema as a wall of movie posters,
-sorted by IMDB rating, in a full-screen TUI. Arrow around the grid, hit ⏎ for
-the detail view — plot, every day's showtimes, the poster up close, and
-Rotten Tomatoes scores with ANSI recreations of the real icons (Certified
-Fresh, fresh tomato, rotten splat, Verified Hot, popcorn bucket, spilled
-bucket). Images render natively in your terminal (Kitty graphics protocol in
-Ghostty/kitty/WezTerm, half-block mosaic anywhere else). It remembers your
-cinema, caches for 12 hours, and opens trailers and booking pages straight in
-the browser.
+*a full-screen poster wall for Village Cinemas Greece — showtimes, IMDB and Rotten Tomatoes verdicts, in the terminal*
 
-A TypeScript rewrite of [village_crawler](https://github.com/johneliades/village_crawler),
-reshaped into an interactive TUI.
+![runtime](https://img.shields.io/badge/runtime-bun-DC2626?style=flat-square&labelColor=111111) ![deps](https://img.shields.io/badge/dependencies-0-DC2626?style=flat-square&labelColor=111111) ![keys](https://img.shields.io/badge/api_keys-0-FBBF24?style=flat-square&labelColor=111111) ![captcha](https://img.shields.io/badge/captchas_bypassed-0_(we_asked._it_said_no)-FBBF24?style=flat-square&labelColor=111111) ![license](https://img.shields.io/badge/license-MIT-DC2626?style=flat-square&labelColor=111111)
 
-## Run it
+</div>
+
+---
+
+## 🎬 What is this
+
+`cine` answers the only two questions that matter on a Friday night: what's playing at your Village cinema, and is it actually worth 12 euros. It scrapes villagecinemas.gr's booking data, cross-references every movie against IMDB and Rotten Tomatoes (no API keys — just public endpoints and good manners), and lays it all out as a wall of real movie posters rendered natively in your terminal via the Kitty graphics protocol.
+
+Arrow around the grid, hit enter, and you get the full case file: the poster up close, both Tomatometer and Popcornmeter with text-character recreations of RT's actual icons (the certified-fresh tomato, the spilled popcorn bucket — all of them), plot, and every showtime for the next three weeks. It remembers your cinema, caches for 12 hours, and falls back to a plain list when piped — because sometimes you just want `cine | grep IMAX`.
+
+It started as a TypeScript port of [village_crawler](https://github.com/johneliades/village_crawler) and ended up with opinions.
+
+```console
+nick@cine:~$ cine
+[✓] the mall athens: 10 movies, sorted by imdb. the odyssey opens at 8.4.
+[i] vaiana is 31% on the tomatometer. the audience gave it 89. someone is wrong.
+```
+
+## 🍿 The wall
+
+| | feature | what it actually does |
+|---|---|---|
+| 01 | **poster grid** | what it actually is — every upcoming movie as its theatrical poster, sorted by rating, drawn pixel-for-pixel in the terminal (half-block mosaic on non-Kitty terminals) |
+| 02 | **triple verdict** | what it actually pulls — IMDB rating via suggestion API + GraphQL, Tomatometer and Popcornmeter scraped from RT's embedded scorecard JSON, localized titles resolved through IMDB's canonical name (VAIANA → Moana) |
+| 03 | **rt icons in ascii** | what it actually renders — certified fresh, fresh tomato, rotten splat, verified hot, upright and spilled popcorn buckets, each exactly 9 columns of colored text characters |
+| 04 | **sort toggle** | what it actually cycles — IMDB → Tomatometer → Popcornmeter → runtime, one keypress, persisted between runs |
+| 05 | **ticket alerts** | what it actually edits — the watch list of [siren](https://github.com/nitrimandylis/siren) via `gh api`, so a GitHub Action pings your phone when booking opens (workflow untouched, forever) |
+| 06 | **smart cache** | what it actually avoids — refetching for 12 hours, invalidating itself when the schema changes or every cached showtime is in the past |
+| 07 | **availability colors** | what it actually mirrors — village's own soldout/limited flags (cyan, yellow, red ✗) — which lag reality, because the live seat map hides behind a captcha we don't fight |
+
+**Keys:** `↑↓←→` move · `⏎` details · `s` sort · `w` watch · `t` trailer · `b` book · `p` prices · `c` cinema · `r` refresh · `q` quit
+
+## 🚀 Run it
+
+You need [bun](https://bun.sh) and macOS (posters lean on `sips`, links on `open`).
 
 ```bash
 git clone https://github.com/nitrimandylis/cine.git
 cd cine
-bun run compile   # → ~/.bun/bin/cine, and man cine into your manpath
+bun run compile   # → ~/.bun/bin/cine, man page into your manpath
 cine
-man cine          # full reference, offline
+man cine          # the full reference, offline
 ```
 
-## Keys
+First run asks which cinema you go to. It never asks again.
 
-| Key | Action |
-|-----|--------|
-| `↑` `↓` `←` `→` | move around the poster grid |
-| `⏎` | detail view — poster, plot, every day's showtimes |
-| `s` | cycle sort: IMDB → Tomatometer → Popcornmeter → runtime |
-| `w` | watch/unwatch: get pinged via [siren](https://github.com/nitrimandylis/siren) when tickets open |
-| `t` | open trailer in browser |
-| `b` | open booking page |
-| `p` | ticket price table |
-| `c` | switch cinema (becomes the new default) |
-| `r` | refresh (skip cache) |
-| `q` / `esc` | quit / back |
-
-Showtime colors: cyan = on sale, yellow = few seats left, red `✗` = sold out —
-as reported by Village's own flags, which often lag real availability (the
-live seat map sits behind a captcha'd booking step).
-
-Flags for scripting: `-c <id>`, `-d DD/MM`, `--list`, `--clear`, `--no-cache`.
-Piped output (`cine -c 21 | cat`) prints a plain list instead of the TUI.
-
-## Ticket alerts
-
-`cine` manages the watch list of [siren](https://github.com/nitrimandylis/siren)
-(a GitHub Actions watcher that pings your phone when Village opens booking)
-through the GitHub API — no workflow editing, ever:
-
-```bash
-cine watch                      # list active watches
-cine watch "avatar 4" --imax    # pinged when IMAX tickets open
-cine unwatch "avatar 4"
-```
-
-Or just press `w` on any movie in the TUI. Requires an authed `gh`.
-
-## Under the hood
+## 🔩 Under the hood
 
 ```mermaid
 flowchart LR
-    A[villagecinemas.gr<br/>bookingData JSON] --> C[parse + group<br/>showtimes]
-    B[IMDB suggestion API<br/>+ public GraphQL] --> D[rating · plot · poster]
-    C --> E[12h cache<br/>~/.cache/cine]
-    D --> E
-    E --> F[TUI<br/>raw ANSI + stdin]
-    F --> G[Kitty graphics<br/>poster via sips]
-    F --> H[open trailer /<br/>booking page]
+    A[villagecinemas.gr<br/>bookingData JSON] --> D[12h cache<br/>~/.cache/cine]
+    B[IMDB suggestion<br/>+ GraphQL] --> D
+    C[RT search page<br/>+ scorecard JSON] --> D
+    D --> E[TUI<br/>raw ANSI + stdin]
+    E --> F[posters via sips<br/>+ Kitty graphics]
+    E --> G[siren watches<br/>via gh api]
 ```
 
-No npm packages at runtime — `fetch` for the network, `sips(1)` for image
-conversion, `open(1)` for the browser, hand-rolled ANSI for the TUI.
+| layer | path | job |
+|---|---|---|
+| everything | `cine.ts` | scraper, enrichment, cache, poster pipeline, hand-rolled TUI — one file, compiled to one binary |
+| tests | `cine.test.ts` | pure-logic checks: parsers, cache staleness, icon alignment, sort order |
+| man page | `man/cine.1` | hand-written roff, installed by `bun run compile` |
 
-## License
+**Stack:** bun · typescript · fetch · sips(1) · open(1) · gh(1) — and zero packages in node_modules that aren't `@types/bun`
 
-MIT
+---
+
+<div align="center">
+
+**[Nick Trimandylis](https://github.com/nitrimandylis)**
+
+`SCRAPED POLITELY. RENDERED LOCALLY. BOOKED EARLY`
+
+MIT licensed.
+
+</div>
