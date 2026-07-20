@@ -47,6 +47,14 @@ nick@cine:~$ cine
 
 **Keys:** `↑↓←→` move · `⏎` details · `s` sort · `w` watch · `t` trailer · `b` book · `p` prices · `c` cinema · `r` refresh · `q` quit
 
+## 📸 Evidence
+
+![the grid](assets/grid.png)
+*the wall — ten movies, ten posters, one obvious winner*
+
+![the detail view](assets/detail.png)
+*the odyssey's case file — certified fresh tomato and hot popcorn bucket, in text characters, as nature intended*
+
 ## 🚀 Run it
 
 You need [bun](https://bun.sh) and macOS (posters lean on `sips`, links on `open`).
