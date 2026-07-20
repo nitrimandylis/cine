@@ -49,7 +49,9 @@ man cine          # full reference, offline
 | `r` | refresh (skip cache) |
 | `q` / `esc` | quit / back |
 
-Showtime colors: cyan = on sale, yellow = few seats left, red `✗` = sold out.
+Showtime colors: cyan = on sale, yellow = few seats left, red `✗` = sold out —
+as reported by Village's own flags, which often lag real availability (the
+live seat map sits behind a captcha'd booking step).
 
 Flags for scripting: `-c <id>`, `-d DD/MM`, `--list`, `--clear`, `--no-cache`.
 Piped output (`cine -c 21 | cat`) prints a plain list instead of the TUI.

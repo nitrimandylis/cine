@@ -41,10 +41,12 @@ binary (`bun run compile` → `~/.bun/bin/cine`) with a man page.
 
 - Nothing planned. Candidates if wanted: other chains (Odeon/Cinepolis),
   publishing the repo.
-- Ruled out: full seat maps — Village's seat-plan endpoint only unlocks
-  after the captcha-gated addtickets step (reCAPTCHA Enterprise), and
-  automating past a captcha is off the table. The isLimited flag is the
-  best keyless availability signal.
+- Ruled out: full seat maps — Village's addtickets step rejects requests
+  without a reCAPTCHA Enterprise token (verified: HTTP 400), and the seat
+  plan only unlocks after it; automating past a captcha is off the table.
+  The soldout/isLimited flags are the best keyless signal, but Village
+  rarely populates them (observed 0 set across 532 sessions), so the
+  showtime colors mirror the website's own badges — no better.
 
 ## Known ceilings
 

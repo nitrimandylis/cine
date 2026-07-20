@@ -72,7 +72,8 @@ keys (inside the TUI):
   ↑/↓/←/→ move around the poster grid   ⏎ details   s cycle sort   w watch
   t trailer   b book   p prices   c switch cinema   r refresh   q quit
 
-showtimes: cyan = on sale, yellow = few seats left, red ✗ = sold out.
+showtimes: cyan = on sale, yellow = few seats, red ✗ = sold out — as
+reported by Village, whose flags often lag real availability.
 piped output (cine | cat) prints a plain list instead of the TUI.`;
 
 // ---------------------------------------------------------------------------
