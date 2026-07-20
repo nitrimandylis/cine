@@ -97,6 +97,9 @@ flowchart LR
 
 `SCRAPED POLITELY. RENDERED LOCALLY. BOOKED EARLY`
 
+Built on the shoulders of [johneliades/village_crawler](https://github.com/johneliades/village_crawler),
+which reverse-engineered the Village booking data first — cine is its TypeScript descendant.
+
 MIT licensed.
 
 </div>
