@@ -28,6 +28,8 @@ import {
   parseAnime,
   animeTitles,
   animeQueries,
+  animeMatches,
+  matchesShow,
   nyaaTitle,
   parseQuality,
   qualityLabel,
@@ -101,6 +103,23 @@ test("parseTrending maps IMDB advancedTitleSearch edges to grid movies", () => {
   const out = parseTrending(j);
   expect(out).toHaveLength(1);
   expect(out[0]).toMatchObject({ id: "tt123", title: "The Odyssey", year: 2026, rating: 8.4, poster: "http://img/o.jpg", kind: "movie" });
+});
+
+test("animeMatches rejects AniList fuzzy false-positives (House → 'The House')", () => {
+  const house = { romaji: "Jib", episodes: 1, titles: {}, synonyms: ["The House"] };
+  expect(animeMatches(house, "House")).toBe(false); // not actually anime
+  const frieren = { romaji: "Sousou no Frieren", episodes: 28, titles: {}, english: "Frieren: Beyond Journey's End" };
+  expect(animeMatches(frieren, "Frieren: Beyond Journey's End")).toBe(true); // english matches
+  expect(animeMatches({ romaji: "Dandadan", episodes: 12, titles: {} }, "Dan Da Dan")).toBe(true); // punctuation-insensitive
+});
+
+test("matchesShow keeps the searched show and rejects longer same-word titles", () => {
+  expect(matchesShow("House.S01E01.Pilot.1080p.REMUX", "House", "s01e01")).toBe(true);
+  expect(matchesShow("House of the Dragon S01E01 The Heirs 1080p", "House", "s01e01")).toBe(false);
+  expect(matchesShow("Spartacus House of Ashur S01E01 1080p", "House", "s01e01")).toBe(false);
+  expect(matchesShow("The Real Housewives Of London S01E01", "House", "s01e01")).toBe(false);
+  expect(matchesShow("House.2004.S01E01.720p", "House M.D.", "s01e01")).toBe(true); // trailing year + dropped suffix
+  expect(matchesShow("Some.Other.Show.S01E01", "House", "1x01")).toBe(true); // tag absent → not judged
 });
 
 test("nyaaTitle strips season descriptors to match fansub naming", () => {

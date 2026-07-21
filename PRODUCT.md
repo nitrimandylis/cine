@@ -84,6 +84,16 @@ binary (`bun run compile` → `~/.bun/bin/cine`) with a man page.
   isn't consistent. AllAnime-style direct streaming was ruled out — its API is
   now Cloudflare- and crypto-gated (`AA_CRYPTO_MISSING`), the exact scraper
   treadmill cine avoids.
+- **Search precision** (fixes streaming generic-titled shows like *House*):
+  (1) AniList `search` fuzzy-matches, so "House" returned the anime "The House" —
+  `animeMatches` now only trusts a hit when the searched title normalizes to one
+  of AniList's own titles, killing the false-anime path. (2) Nyaa is anime-only,
+  so non-anime movies/TV skip it (no more random anime in the source list).
+  (3) A relevance guard drops torrents whose title isn't the searched show: the
+  release name before the SxxEyy/year must *be* the show (trailing words + a
+  year dropped), never have extra leading words — so `House S01E01` returns the
+  real *House* pilot, not `House of the Dragon` / `Spartacus House of Ashur`.
+  Falls back to unfiltered if it would drop everything.
 - Flags: `-c`, `-d DD/MM`, `--list`, `--clear`, `--no-cache`, `--dub`/`--sub`.
 
 ## Where it's headed

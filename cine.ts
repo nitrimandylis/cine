@@ -1097,19 +1097,42 @@ function magnetHash(magnet: string): string {
   return magnet.match(/btih:([a-z0-9]+)/i)?.[1]?.toLowerCase() ?? magnet;
 }
 
+/** Is `name` a torrent for show `title` (given its SxxEyy / year `tag`)? The
+ *  release title — the part before the tag — must BE the show name, optionally
+ *  with trailing words dropped (releases write "House", not "House M.D.") and a
+ *  trailing year ignored. Extra leading words mean a different, longer show, so
+ *  "House of the Dragon" and "Spartacus House of Ashur" are rejected for "House".
+ *  A tag not present in the name isn't judged (kept). Pure. */
+export function matchesShow(name: string, title: string, tag: string): boolean {
+  const norm = name.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const t = tag.toLowerCase();
+  const i = t ? norm.indexOf(t) : -1;
+  if (i < 0) return true;
+  const pre = norm.slice(0, i).trim().split(/\s+/).filter(Boolean);
+  if (pre.length && /^(19|20)\d\d$/.test(pre[pre.length - 1])) pre.pop(); // drop a year token
+  const show = title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(/\s+/).filter(Boolean);
+  if (!pre.length || !show.length) return true;
+  if (pre.length > show.length) return false; // extra leading words → different show
+  return pre.every((w, k) => w === show[k]); // release title is a prefix of the show name
+}
+
 /** Query both indexers and merge by seeders — Knaben covers movies/TV, Nyaa
  *  covers anime, so no content classifier is needed. Each argument may be one
- *  query or several (anime fans out over title/number variants); all run in
- *  parallel and merge, de-duped by btih. Highest-seeded first. */
+ *  query or several (anime fans out over title/number variants); pass "" to skip
+ *  an indexer (Nyaa is skipped for non-anime). All run in parallel and merge,
+ *  de-duped by btih. `relevance`, when given, drops results whose title isn't the
+ *  searched show (guards generic names like "House"), keeping seeder order; if it
+ *  would drop everything it's ignored. Highest-seeded first. */
 async function resolveTorrents(
   knaben: string | string[],
   nyaa: string | string[] = knaben,
+  relevance?: { title: string; tag: string },
 ): Promise<Torrent[]> {
   const kq = [...new Set((Array.isArray(knaben) ? knaben : [knaben]).filter(Boolean))];
   const nq = [...new Set((Array.isArray(nyaa) ? nyaa : [nyaa]).filter(Boolean))];
   const results = await Promise.all([...kq.map(knabenSearch), ...nq.map(nyaaSearch)]);
   const seen = new Set<string>();
-  return results
+  const merged = results
     .flat()
     .filter((t) => {
       const h = magnetHash(t.magnet);
@@ -1118,6 +1141,11 @@ async function resolveTorrents(
       return true;
     })
     .sort((a, b) => b.seeders - a.seeders);
+  if (relevance?.title) {
+    const kept = merged.filter((t) => matchesShow(t.title, relevance.title, relevance.tag));
+    if (kept.length) return kept;
+  }
+  return merged;
 }
 
 // ---------------------------------------------------------------------------
@@ -1259,6 +1287,19 @@ export function parseAnime(j: any): AnimeInfo | null {
   return { romaji, episodes, titles, english, synonyms };
 }
 
+/** Strip everything but letters/digits for tolerant title comparison. Pure. */
+export function normKey(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+/** AniList `search` fuzzy-matches, so "House" returns the anime "The House".
+ *  Only trust the match when the searched title exactly equals (normalized) one
+ *  of AniList's own titles — otherwise it's a false positive, not anime. Pure. */
+export function animeMatches(a: AnimeInfo, title: string): boolean {
+  const want = normKey(title);
+  return want !== "" && [a.romaji, a.english ?? "", ...(a.synonyms ?? [])].some((t) => normKey(t) === want);
+}
+
 async function fetchAnime(title: string): Promise<AnimeInfo | null> {
   try {
     const r = await fetch("https://graphql.anilist.co", {
@@ -1270,7 +1311,8 @@ async function fetchAnime(title: string): Promise<AnimeInfo | null> {
       }),
     });
     if (!r.ok) return null;
-    return parseAnime(await r.json());
+    const a = parseAnime(await r.json());
+    return a && animeMatches(a, title) ? a : null; // reject fuzzy false matches
   } catch {
     return null;
   }
@@ -1604,22 +1646,26 @@ async function streamCli(query: string) {
 
   // 2. a series → browse season/episode; a movie → title (+year). No IMDB match
   //    (raw "Show S01E05" query) → search the raw query, embedded subs only.
+  //    Nyaa is anime-only, so non-anime skips it ("") and a relevance guard keeps
+  //    generic titles ("House") from matching longer shows ("House of the Dragon").
   let ep: { season: number; number: number } | null = null;
   let knabenQ: string | string[], nyaaQ: string | string[];
+  let relevance: { title: string; tag: string } | undefined;
   if (movie && isSeries(movie)) {
     const sel = await pickEpisode(movie);
     if (!sel) return; // cancelled
-    ({ knabenQ, nyaaQ, ep } = sel);
+    ({ knabenQ, nyaaQ, ep, relevance } = sel);
   } else if (movie) {
     knabenQ = movie.year ? `${movie.title} ${movie.year}` : movie.title;
-    nyaaQ = movie.title;
+    nyaaQ = "";
+    relevance = { title: movie.title, tag: String(movie.year ?? "") };
   } else {
     knabenQ = nyaaQ = query;
   }
 
   // 3. find sources, pick one
   process.stderr.write("\x1b[2Kfinding sources…\r");
-  const torrents = await resolveTorrents(knabenQ, nyaaQ);
+  const torrents = await resolveTorrents(knabenQ, nyaaQ, relevance);
   process.stderr.write("\x1b[2K");
   if (!torrents.length) return fail("no source found — try a different search");
   const t = await fzfPick(
@@ -1653,9 +1699,12 @@ async function streamCli(query: string) {
 /** Season/episode selection for a series, returning the torrent search terms and
  *  the episode (for resume history). Anime is numbered via AniList (flat, romaji
  *  + episode) like the TUI; regular TV uses IMDB seasons/episodes and SxxEyy. */
-async function pickEpisode(
-  m: Movie,
-): Promise<{ knabenQ: string | string[]; nyaaQ: string | string[]; ep: { season: number; number: number } } | null> {
+async function pickEpisode(m: Movie): Promise<{
+  knabenQ: string | string[];
+  nyaaQ: string | string[];
+  ep: { season: number; number: number };
+  relevance?: { title: string; tag: string };
+} | null> {
   process.stderr.write("loading episodes…\r");
   const anime = await fetchAnime(m.title);
   process.stderr.write("\x1b[2K");
@@ -1689,8 +1738,13 @@ async function pickEpisode(
     "episode> ",
   );
   if (!ep) return null;
-  const q = `${m.title} ${sxxeyy(season, ep.number)}`;
-  return { knabenQ: q, nyaaQ: q, ep: { season, number: ep.number } };
+  const tag = sxxeyy(season, ep.number);
+  return {
+    knabenQ: `${m.title} ${tag}`,
+    nyaaQ: "", // Nyaa is anime-only; this is regular TV
+    ep: { season, number: ep.number },
+    relevance: { title: m.title, tag },
+  };
 }
 
 function fail(msg: string): never {
@@ -2377,10 +2431,11 @@ async function startStreamFor(
   imdbId: string,
   knabenQuery: string | string[],
   nyaaQuery: string | string[],
+  relevance?: { title: string; tag: string },
 ) {
   state.flash = "finding sources…";
   render();
-  const torrents = await resolveTorrents(knabenQuery, nyaaQuery);
+  const torrents = await resolveTorrents(knabenQuery, nyaaQuery, relevance);
   state.flash = "";
   if (!torrents.length) {
     state.flash = "no source found — try a different search";
@@ -2395,15 +2450,20 @@ async function startStreamFor(
   render();
 }
 
-/** A movie: search title (+year). */
+/** A movie: search Knaben by title (+year); Nyaa is anime-only so it's skipped,
+ *  and a relevance guard keeps a generic title off longer same-word shows. */
 function startStream(m: Movie) {
   state.pickMovie = m;
   state.pickEp = null;
-  return startStreamFor(m.title, m.id, m.year ? `${m.title} ${m.year}` : m.title, m.title);
+  return startStreamFor(m.title, m.id, m.year ? `${m.title} ${m.year}` : m.title, "", {
+    title: m.title,
+    tag: String(m.year ?? ""),
+  });
 }
 
-/** Stream one episode. Anime searches Nyaa by romaji + episode number and
- *  Knaben by SxxEyy; regular TV uses SxxEyy on both. */
+/** Stream one episode. Anime searches Nyaa by every title variant + episode
+ *  number and Knaben by SxxEyy; regular TV uses SxxEyy on Knaben only (Nyaa is
+ *  anime-only) with a relevance guard against generic titles. */
 function streamEpisode(s: SeriesState) {
   const ep = s.episodes[s.epSel];
   if (!ep) return;
@@ -2419,8 +2479,7 @@ function streamEpisode(s: SeriesState) {
       animeQueries(s.aTitles, ep.number, dubMode),
     );
   }
-  const q = `${s.title} ${tag}`;
-  return startStreamFor(`${s.title} ${tag}`, s.imdbId, q, q);
+  return startStreamFor(`${s.title} ${tag}`, s.imdbId, `${s.title} ${tag}`, "", { title: s.title, tag });
 }
 
 async function loadSeries(m: Movie) {
