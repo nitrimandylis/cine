@@ -23,7 +23,29 @@ import {
   pickSubtitles,
   parseSuggestions,
   parseYifyEnglish,
+  parseSeasons,
+  parseEpisodes,
 } from "./cine";
+
+test("parseSeasons returns sorted season numbers", () => {
+  const j = { data: { title: { episodes: { seasons: [{ number: 2 }, { number: 1 }, { number: 10 }] } } } };
+  expect(parseSeasons(j)).toEqual([1, 2, 10]);
+  expect(parseSeasons({})).toEqual([]);
+});
+
+test("parseEpisodes maps S/E, title, rating and sorts by number", () => {
+  const node = (s: number, e: number, t: string, r: number | null) => ({
+    node: {
+      titleText: { text: t },
+      ratingsSummary: { aggregateRating: r },
+      series: { episodeNumber: { seasonNumber: s, episodeNumber: e } },
+    },
+  });
+  const j = { data: { title: { episodes: { episodes: { edges: [node(1, 2, "Two", 7.8), node(1, 1, "Pilot", 8.2)] } } } } };
+  const eps = parseEpisodes(j);
+  expect(eps.map((e) => e.number)).toEqual([1, 2]);
+  expect(eps[0]).toEqual({ season: 1, number: 1, title: "Pilot", rating: 8.2 });
+});
 
 test("parseYifyEnglish picks the English row, not a title containing 'english'", () => {
   const html = `
