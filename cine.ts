@@ -1087,10 +1087,16 @@ async function ensureRqbit(): Promise<boolean> {
   return false;
 }
 
-/** Add a magnet, return the torrent id + chosen video file index. */
+/** Add a magnet, return the torrent id + chosen video file index. The POST
+ *  blocks while rqbit resolves metadata from peers, so cap it — a dead magnet
+ *  would otherwise hang forever. */
 async function rqbitAdd(magnet: string): Promise<{ id: number; fileIdx: number } | null> {
   try {
-    const res = await fetch(`${RQBIT_BASE}/torrents?overwrite=true`, { method: "POST", body: magnet });
+    const res = await fetch(`${RQBIT_BASE}/torrents?overwrite=true`, {
+      method: "POST",
+      body: magnet,
+      signal: AbortSignal.timeout(30_000),
+    });
     if (!res.ok) return null;
     const j: any = await res.json();
     const fileIdx = pickVideoFile(j.details?.files ?? []);
@@ -1101,14 +1107,21 @@ async function rqbitAdd(magnet: string): Promise<{ id: number; fileIdx: number }
   }
 }
 
+/** Open a URL in IINA. Prefer IINA's own `iina` CLI, which actually loads the
+ *  stream — `open -a IINA <httpURL>` tends to just foreground the app. */
+function openInIina(url: string) {
+  const hasCli = Bun.spawnSync(["which", "iina"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+  const cmd = hasCli ? ["iina", "--no-stdin", url] : ["open", "-a", "IINA", url];
+  Bun.spawn(cmd, { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
+}
+
 /** Resolve → add → open in IINA. Returns a human status message. */
 async function streamMagnet(magnet: string): Promise<string> {
   if (!rqbitInstalled()) return "rqbit not found — run: brew install rqbit";
   if (!(await ensureRqbit())) return "couldn't start rqbit server";
   const added = await rqbitAdd(magnet);
-  if (!added) return "no playable video file in that torrent";
-  const url = `${RQBIT_BASE}/torrents/${added.id}/stream/${added.fileIdx}`;
-  Bun.spawn(["open", "-a", "IINA", url], { stdout: "ignore", stderr: "ignore" });
+  if (!added) return "source has no seeds or no video — try another";
+  openInIina(`${RQBIT_BASE}/torrents/${added.id}/stream/${added.fileIdx}`);
   return "streaming → IINA (give it a few seconds)";
 }
 
