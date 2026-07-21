@@ -18,7 +18,44 @@ import {
   SORTS,
   parseDefaultIface,
   isTunnelIface,
+  parseKnaben,
+  parseNyaaRss,
+  humanSize,
 } from "./cine";
+
+test("parseKnaben builds magnets and formats size", () => {
+  const out = parseKnaben({
+    hits: [
+      { title: "The Matrix 1999 1080p", seeders: "552", bytes: 1992277407, tracker: "The Pirate Bay", hash: "D7A46713EAEE18C746B3254B7D1492A50FD9D6CE" },
+      { title: "no hash skipped", seeders: 3 },
+    ],
+  });
+  expect(out.length).toBe(1); // the hash-less hit is dropped
+  expect(out[0].magnet).toContain("urn:btih:D7A46713");
+  expect(out[0].magnet).toContain("tr=udp"); // trackers appended
+  expect(out[0].seeders).toBe(552);
+  expect(out[0].size).toBe("1.9 GB");
+});
+
+test("parseNyaaRss pulls magnets from infoHash", () => {
+  const xml = `<rss><channel><item>
+    <title>[SubsPlease] Frieren (01) 1080p</title>
+    <nyaa:seeders>210</nyaa:seeders>
+    <nyaa:size>1.4 GiB</nyaa:size>
+    <nyaa:infoHash>abc123def4567890abc123def4567890abc123de</nyaa:infoHash>
+  </item></channel></rss>`;
+  const out = parseNyaaRss(xml);
+  expect(out.length).toBe(1);
+  expect(out[0].seeders).toBe(210);
+  expect(out[0].size).toBe("1.4 GiB");
+  expect(out[0].magnet).toContain("urn:btih:abc123def4");
+});
+
+test("humanSize scales bytes", () => {
+  expect(humanSize(0)).toBe("?");
+  expect(humanSize(1500)).toBe("1.5 KB");
+  expect(humanSize(1992277407)).toBe("1.9 GB");
+});
 
 test("VPN gate trusts a tunnel only when it carries the default route", () => {
   const via = (iface: string) =>

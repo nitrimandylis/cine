@@ -881,6 +881,104 @@ async function vpnStatus(): Promise<{ iface: string | null; tunnel: boolean; org
 }
 
 // ---------------------------------------------------------------------------
+// Torrent sources — magnets by title from the r/Piracy-trusted indexers:
+// Knaben (an aggregator over vetted trackers) for movies/TV, Nyaa for anime.
+// A magnet is a content hash, so unlike streaming-site scrapers there's
+// nothing to obfuscate or rotate — near-zero maintenance.
+// ---------------------------------------------------------------------------
+
+export type Torrent = { title: string; magnet: string; seeders: number; size: string; source: string };
+
+// public trackers appended to hash-only results so the client finds peers
+const TRACKERS = [
+  "udp://tracker.opentrackr.org:1337/announce",
+  "udp://open.demonii.com:1337/announce",
+  "udp://tracker.openbittorrent.com:6969/announce",
+  "udp://exodus.desync.com:6969/announce",
+];
+
+function magnetFromHash(hash: string, name: string): string {
+  const tr = TRACKERS.map((t) => `&tr=${encodeURIComponent(t)}`).join("");
+  return `magnet:?xt=urn:btih:${hash}&dn=${encodeURIComponent(name)}${tr}`;
+}
+
+export function humanSize(bytes: number): string {
+  if (!bytes || bytes < 0) return "?";
+  const u = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  let n = bytes;
+  while (n >= 1024 && i < u.length - 1) {
+    n /= 1024;
+    i++;
+  }
+  return `${n.toFixed(n < 10 && i > 0 ? 1 : 0)} ${u[i]}`;
+}
+
+/** Parse Knaben's JSON response into torrents. Pure. */
+export function parseKnaben(data: any): Torrent[] {
+  const hits: any[] = data?.hits ?? [];
+  return hits
+    .map((h) => ({
+      title: h.title ?? "",
+      magnet: h.magnetUrl || (h.hash ? magnetFromHash(h.hash, h.title ?? "") : ""),
+      seeders: Number(h.seeders) || 0,
+      size: humanSize(Number(h.bytes) || 0),
+      source: h.tracker ?? "knaben",
+    }))
+    .filter((t) => t.magnet);
+}
+
+/** Parse Nyaa's RSS into torrents. Pure. */
+export function parseNyaaRss(xml: string): Torrent[] {
+  const items = xml.match(/<item>[\s\S]*?<\/item>/g) ?? [];
+  return items
+    .map((it) => {
+      const title = stripHtml(it.match(/<title>([\s\S]*?)<\/title>/)?.[1] ?? "");
+      const hash = it.match(/<nyaa:infoHash>([\s\S]*?)<\/nyaa:infoHash>/)?.[1]?.trim() ?? "";
+      return {
+        title,
+        magnet: hash ? magnetFromHash(hash, title) : "",
+        seeders: Number(it.match(/<nyaa:seeders>(\d+)<\/nyaa:seeders>/)?.[1]) || 0,
+        size: (it.match(/<nyaa:size>([\s\S]*?)<\/nyaa:size>/)?.[1] ?? "?").trim(),
+        source: "nyaa",
+      };
+    })
+    .filter((t) => t.magnet);
+}
+
+async function knabenSearch(query: string): Promise<Torrent[]> {
+  try {
+    const res = await fetch("https://api.knaben.org/v1", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "User-Agent": UA },
+      body: JSON.stringify({ query, order_by: "seeders", order_direction: "desc", size: 20 }),
+    });
+    if (!res.ok) return [];
+    return parseKnaben(await res.json()).sort((a, b) => b.seeders - a.seeders);
+  } catch {
+    return [];
+  }
+}
+
+async function nyaaSearch(query: string): Promise<Torrent[]> {
+  try {
+    const res = await fetch(`https://nyaa.si/?page=rss&c=1_2&f=0&q=${encodeURIComponent(query)}`, {
+      headers: { "User-Agent": UA },
+    });
+    if (!res.ok) return [];
+    return parseNyaaRss(await res.text()).sort((a, b) => b.seeders - a.seeders);
+  } catch {
+    return [];
+  }
+}
+
+/** Anime → Nyaa (by title), everything else → Knaben (by title + year). */
+async function resolveTorrents(title: string, year: number, anime: boolean): Promise<Torrent[]> {
+  if (anime) return nyaaSearch(title);
+  return knabenSearch(year ? `${title} ${year}` : title);
+}
+
+// ---------------------------------------------------------------------------
 // TUI
 // ---------------------------------------------------------------------------
 
