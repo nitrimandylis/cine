@@ -912,7 +912,7 @@ async function knabenSearch(query: string): Promise<Torrent[]> {
     const res = await fetch("https://api.knaben.org/v1", {
       method: "POST",
       headers: { "Content-Type": "application/json", "User-Agent": UA },
-      body: JSON.stringify({ query, order_by: "seeders", order_direction: "desc", size: 20 }),
+      body: JSON.stringify({ query, order_by: "seeders", order_direction: "desc", size: 50 }),
     });
     if (!res.ok) return [];
     return parseKnaben(await res.json()).sort((a, b) => b.seeders - a.seeders);
@@ -1558,23 +1558,30 @@ function prefetchHomePosters() {
   }
 }
 
-/** One picker row: marker · seeders · size · source · title. */
+/** One picker row: marker · seeders (▲) · size · source · title. */
 function pickerRow(t: Torrent, selected: boolean): string {
   const mark = selected ? `${A.cyan}${A.bold}▸ ${A.reset}` : "  ";
-  const seeds = `${A.green}${String(t.seeders).padStart(4)}s${A.reset}`;
-  const size = `${A.grey}${t.size.padStart(8)}${A.reset}`;
+  const seeds = `${A.green}${String(t.seeders).padStart(5)}▲${A.reset}`;
+  const size = `${A.grey}${t.size.padStart(9)}${A.reset}`;
   const src = `${A.grey}${truncate(t.source, 12).padEnd(12)}${A.reset}`;
-  const name = selected ? `${A.bold}${truncate(t.title, 38)}${A.reset}` : truncate(t.title, 38);
-  return `${mark}${seeds} ${size} ${src} ${name}`;
+  const name = selected ? `${A.bold}${truncate(t.title, 36)}${A.reset}` : truncate(t.title, 36);
+  return `${mark}${seeds} ${size}  ${src} ${name}`;
 }
 
+/** Picker lines with a header and a scroll window that fits the terminal, so
+ *  the list can hold many sources without overflowing the screen. */
 function buildPickerLines(): string[] {
+  const capacity = Math.max(4, (process.stdout.rows || 24) - 9); // rows for entries
+  const total = state.picks.length;
+  const start =
+    total <= capacity ? 0 : Math.min(Math.max(0, state.pickSel - Math.floor(capacity / 2)), total - capacity);
+  const shown = state.picks.slice(start, start + capacity);
+  const counter = total > capacity ? `  ·  ${start + 1}–${start + shown.length}/${total}` : "";
   return [
     `${A.bold}${truncate(state.pickTitle, 46)}${A.reset}`,
-    "",
-    ...state.picks.map((t, i) => pickerRow(t, i === state.pickSel)),
-    "",
-    `${A.grey}↑↓ choose · ⏎ play · esc cancel${A.reset}`,
+    `${A.grey}   seeders      size  source       title${A.reset}`,
+    ...shown.map((t, li) => pickerRow(t, start + li === state.pickSel)),
+    `${A.grey}↑↓ choose · ⏎ play · esc cancel${counter}${A.reset}`,
   ];
 }
 
@@ -1588,7 +1595,7 @@ async function startStream(m: Movie) {
     state.flash = "no torrent found for that title";
     return render();
   }
-  state.picks = torrents.slice(0, 8);
+  state.picks = torrents.slice(0, 25);
   state.pickSel = 0;
   state.pickTitle = m.title;
   state.overlay = "picker";
