@@ -35,17 +35,23 @@ binary (`bun run compile` → `~/.bun/bin/cine`) with a man page.
   the watches.json of nitrimandylis/siren via `gh api`, so ticket alerts
   never require touching GitHub Actions.
 - Piped output falls back to a plain text list for scripting.
-- Flags: `-c`, `-d DD/MM`, `--list`, `--clear`, `--no-cache`.
+- **Streaming hub:** `⇥` switches Cinemas ⇄ Home. Home reuses the poster
+  grid/detail to search any title (IMDB suggestion), then `p` streams it into
+  IINA — magnets from Knaben (movies/TV) + Nyaa (anime), played via `rqbit`'s
+  HTTP stream endpoint. `v` shows VPN status. Refuses to stream unless a
+  full-tunnel VPN is the default route (`--no-vpn-check` overrides). Needs
+  `rqbit` (`brew install rqbit`) and a VPN with its kill switch on.
+- Flags: `-c`, `-d DD/MM`, `--list`, `--clear`, `--no-cache`, `--no-vpn-check`.
 
 ## Where it's headed
 
-- **Streaming hub (in design, spec: `docs/superpowers/specs/2026-07-21-streaming-hub-design.md`).**
-  `Tab` switches Cinemas ⇄ Home. Home reuses the poster grid/detail to browse
-  any title and stream it into IINA. Torrent-native (not streaming-site
-  scrapers, which are a dead/daily-breaking arms race): magnets from Knaben
-  (movies/TV) + Nyaa (anime), played via `rqbit`'s HTTP stream endpoint. A magnet
-  is a content hash, so near-zero maintenance.
-- **VPN safety — Level 0 (shipping):** cine refuses to stream unless a
+- **Streaming hub — shipped** (see Current state; design notes in the gitignored
+  `docs/superpowers/specs/2026-07-21-streaming-hub-design.md`). Torrent-native
+  rather than streaming-site scrapers, which are a dead/daily-breaking arms race
+  (lobster archived, ani-cli on a key-rotation treadmill) — a magnet is a content
+  hash, so near-zero maintenance. Next: a source picker (choose among
+  quality/size/seeders instead of auto top-seeded).
+- **VPN safety — Level 0 (done):** cine refuses to stream unless a
   full-tunnel VPN is the default route (checked via `route get default`; a bare
   `utun` doesn't count — macOS keeps idle ones). `--no-vpn-check` overrides.
   `v` shows interface + public-IP org. cine stays VPN-agnostic; the drop-leak
