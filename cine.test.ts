@@ -19,7 +19,7 @@ import {
   parseKnaben,
   parseNyaaRss,
   humanSize,
-  pickVideoFile,
+  selectVideos,
   pickSubtitles,
   parseSuggestions,
   parseYifyEnglish,
@@ -66,15 +66,27 @@ test("parseSuggestions keeps watchable titles and drops people/games", () => {
   expect(out[0].rating).toBeNull(); // enriched lazily
 });
 
-test("pickVideoFile picks the largest video, ignoring samples and non-video", () => {
-  const files = [
+test("selectVideos: single movie drops sample/extras, keeps the feature", () => {
+  const vids = selectVideos([
     { name: "readme.txt", length: 100 },
-    { name: "sample.mkv", length: 50_000_000 },
+    { name: "sample.mkv", length: 40_000_000 }, // sample name + under 50MB
     { components: ["Movie", "movie.mkv"], length: 8_000_000_000 },
     { name: "cover.jpg", length: 200_000 },
-  ];
-  expect(pickVideoFile(files)).toBe(2); // the 8GB mkv (via components path)
-  expect(pickVideoFile([{ name: "notes.nfo", length: 10 }])).toBe(-1);
+  ]);
+  expect(vids.map((v) => v.idx)).toEqual([2]); // just the feature
+});
+
+test("selectVideos: season pack lists episodes, E2 before E10 (natural sort)", () => {
+  const vids = selectVideos([
+    { name: "Show.S01E10.1080p.mkv", length: 2_000_000_000 },
+    { name: "Show.S01E02.1080p.mkv", length: 2_000_000_000 },
+    { name: "Show.S01E01.1080p.mkv", length: 2_000_000_000 },
+  ]);
+  expect(vids.map((v) => v.name)).toEqual([
+    "Show.S01E01.1080p.mkv",
+    "Show.S01E02.1080p.mkv",
+    "Show.S01E10.1080p.mkv",
+  ]);
 });
 
 test("parseKnaben builds magnets and formats size", () => {

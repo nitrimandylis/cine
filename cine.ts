@@ -1051,18 +1051,16 @@ function fileName(f: RqFile): string {
   return f.name ?? f.components?.join("/") ?? "";
 }
 
-/** Index of the largest video file in a torrent, or -1 if none. Pure. */
-export function pickVideoFile(files: RqFile[]): number {
-  let best = -1;
-  let bestLen = -1;
-  files.forEach((f, i) => {
-    const len = f.length ?? 0;
-    if (VIDEO_EXT.test(fileName(f)) && len > bestLen) {
-      best = i;
-      bestLen = len;
-    }
-  });
-  return best;
+type Video = { idx: number; name: string; length: number };
+
+/** The playable episodes/movie in a torrent: video files over 50 MB (drops
+ *  samples/extras), naturally sorted so E02 precedes E10. One entry = a movie
+ *  or single episode; many = a season pack / anime batch. Pure. */
+export function selectVideos(files: RqFile[]): Video[] {
+  return files
+    .map((f, i) => ({ idx: i, name: fileName(f), length: f.length ?? 0 }))
+    .filter((v) => VIDEO_EXT.test(v.name) && v.length >= 50_000_000 && !/sample/i.test(v.name))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 }
 
 /** Indices of subtitle files shipped in the torrent, English first, capped.
@@ -1168,7 +1166,11 @@ async function ensureRqbit(): Promise<boolean> {
 /** Add a magnet, return the torrent id + chosen video file index. The POST
  *  blocks while rqbit resolves metadata from peers, so cap it — a dead magnet
  *  would otherwise hang forever. */
-async function rqbitAdd(magnet: string): Promise<{ id: number; fileIdx: number; subIdx: number[] } | null> {
+type Pack = { id: number; videos: Video[]; files: RqFile[] };
+
+/** Add a magnet, return the torrent id + its playable videos + all files. The
+ *  POST blocks while rqbit resolves metadata from peers, so cap it. */
+async function rqbitAddFiles(magnet: string): Promise<Pack | null> {
   try {
     const res = await fetch(`${RQBIT_BASE}/torrents?overwrite=true`, {
       method: "POST",
@@ -1178,9 +1180,9 @@ async function rqbitAdd(magnet: string): Promise<{ id: number; fileIdx: number; 
     if (!res.ok) return null;
     const j: any = await res.json();
     const files = j.details?.files ?? [];
-    const fileIdx = pickVideoFile(files);
-    if (fileIdx < 0) return null;
-    return { id: j.id, fileIdx, subIdx: pickSubtitles(files) };
+    const videos = selectVideos(files);
+    if (!videos.length) return null;
+    return { id: j.id, videos, files };
   } catch {
     return null;
   }
@@ -1202,18 +1204,16 @@ function openInIina(videoUrl: string, subUrls: string[]) {
   Bun.spawn(cmd, { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
 }
 
-/** Resolve → add → fetch subs → open in IINA. Returns a human status message. */
-async function streamMagnet(magnet: string, imdbId: string): Promise<string> {
-  if (!rqbitInstalled()) return "rqbit not found — run: brew install rqbit";
-  if (!(await ensureRqbit())) return "couldn't start rqbit server";
-  const added = await rqbitAdd(magnet);
-  if (!added) return "source has no seeds or no video — try another";
-  const base = `${RQBIT_BASE}/torrents/${added.id}/stream`;
-  const subs = added.subIdx.map((i) => `${base}/${i}`);
-  // external English .srt first so IINA loads it as the default track
+/** Stream one video file from an added torrent into IINA with subtitles.
+ *  Torrent .srt files are only attached for a single-video torrent (a pack has
+ *  per-episode subs we can't reliably map, so those rely on embedded tracks). */
+async function playFile(pack: Pack, fileIdx: number, imdbId: string): Promise<string> {
+  const base = `${RQBIT_BASE}/torrents/${pack.id}/stream`;
+  const subs = pack.videos.length === 1 ? pickSubtitles(pack.files).map((i) => `${base}/${i}`) : [];
+  // external English .srt (movies only) first so IINA loads it as default
   const external = await fetchExternalSub(imdbId);
   if (external) subs.unshift(external);
-  openInIina(`${base}/${added.fileIdx}`, subs);
+  openInIina(`${base}/${fileIdx}`, subs);
   return subs.length
     ? `streaming → IINA (${subs.length} subtitle${subs.length > 1 ? "s" : ""})`
     : "streaming → IINA (embedded subs if any)";
@@ -1247,12 +1247,14 @@ const state = {
   homeMovies: [] as Movie[],
   mode: "normal" as "normal" | "search",
   searchBuf: "",
-  overlay: null as null | "picker",
+  overlay: null as null | "picker" | "files",
   overlayLines: [] as string[],
   picks: [] as Torrent[],
   pickSel: 0,
   pickTitle: "",
   pickImdb: "",
+  pack: null as Pack | null,
+  fileSel: 0,
 };
 
 /** The movie list for the active tab (Home search results, or Village grid). */
@@ -1699,10 +1701,67 @@ async function startStream(m: Movie) {
   render();
 }
 
+/** One episode-picker row: marker · size · filename. */
+function fileRow(v: Video, selected: boolean): string {
+  const mark = selected ? `${A.cyan}${A.bold}▸ ${A.reset}` : "  ";
+  const size = `${A.grey}${humanSize(v.length).padStart(9)}${A.reset}`;
+  const name = selected ? `${A.bold}${truncate(v.name, 46)}${A.reset}` : truncate(v.name, 46);
+  return `${mark}${size}  ${name}`;
+}
+
+function buildFileLines(): string[] {
+  const vids = state.pack?.videos ?? [];
+  const capacity = Math.max(4, (process.stdout.rows || 24) - 9);
+  const total = vids.length;
+  const start =
+    total <= capacity ? 0 : Math.min(Math.max(0, state.fileSel - Math.floor(capacity / 2)), total - capacity);
+  const shown = vids.slice(start, start + capacity);
+  const counter = total > capacity ? `  ·  ${start + 1}–${start + shown.length}/${total}` : "";
+  return [
+    `${A.bold}${truncate(state.pickTitle, 40)}${A.reset} ${A.grey}— ${total} episodes${A.reset}`,
+    `${A.grey}      size  file${A.reset}`,
+    ...shown.map((v, li) => fileRow(v, start + li === state.fileSel)),
+    `${A.grey}↑↓ choose · ⏎ play · esc cancel${counter}${A.reset}`,
+  ];
+}
+
+/** Chosen source → add torrent → play directly (movie/single episode) or open
+ *  the episode picker (season pack / anime batch). */
 async function playPick(t: Torrent) {
-  state.flash = "starting stream + subtitles…";
+  state.flash = "starting stream…";
   render();
-  state.flash = await streamMagnet(t.magnet, state.pickImdb);
+  if (!rqbitInstalled()) {
+    state.flash = "rqbit not found — run: brew install rqbit";
+    return render();
+  }
+  if (!(await ensureRqbit())) {
+    state.flash = "couldn't start rqbit server";
+    return render();
+  }
+  const pack = await rqbitAddFiles(t.magnet);
+  if (!pack) {
+    state.flash = "source has no seeds or no video — try another";
+    return render();
+  }
+  if (pack.videos.length === 1) {
+    state.flash = await playFile(pack, pack.videos[0].idx, state.pickImdb);
+    return render();
+  }
+  state.pack = pack;
+  state.fileSel = 0;
+  state.overlay = "files";
+  state.overlayLines = buildFileLines();
+  render();
+}
+
+async function playEpisode() {
+  const pack = state.pack;
+  const v = pack?.videos[state.fileSel];
+  state.overlay = null;
+  if (!pack || !v) return render();
+  state.flash = "starting episode…";
+  render();
+  state.flash = await playFile(pack, v.idx, state.pickImdb);
   render();
 }
 
@@ -1720,6 +1779,20 @@ async function handleKey(key: string) {
       return render();
     } else return;
     state.overlayLines = buildPickerLines();
+    return render();
+  }
+
+  // the episode picker (season packs / anime batches)
+  if (state.overlay === "files") {
+    if (key === "\x1b[A" || key === "k") state.fileSel = Math.max(0, state.fileSel - 1);
+    else if (key === "\x1b[B" || key === "j")
+      state.fileSel = Math.min((state.pack?.videos.length ?? 1) - 1, state.fileSel + 1);
+    else if (key === "\r" || key === "\n") return playEpisode();
+    else if (key === "\x1b" || key === "q") {
+      state.overlay = null;
+      return render();
+    } else return;
+    state.overlayLines = buildFileLines();
     return render();
   }
 
