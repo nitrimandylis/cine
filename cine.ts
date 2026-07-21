@@ -62,6 +62,7 @@ usage:
   cine --list          list cinema IDs and exit
   cine --clear         clear the cache for your cinema, then fetch fresh
   cine --no-cache      ignore the cache, always fetch fresh
+  cine --no-vpn-check  allow streaming without a VPN default route (risky)
 
 siren (ticket alerts via github.com/nitrimandylis/siren):
   cine watch                     list active watches
@@ -69,11 +70,14 @@ siren (ticket alerts via github.com/nitrimandylis/siren):
   cine unwatch <title>           stop watching
 
 keys (inside the TUI):
-  ↑/↓/←/→ move around the poster grid   ⏎ details   s cycle sort   w watch
-  t trailer   b book   p prices   c switch cinema   r refresh   q quit
+  ⇥ switch tab (Cinemas / Home)   ↑/↓/←/→ move   ⏎ details   q quit
+  Cinemas: s sort · w watch · t trailer · b book · p prices · c cinema · r refresh
+  Home:    / search · p play (stream to IINA via rqbit) · v vpn status
 
-showtimes: cyan = on sale, yellow = few seats, red ✗ = sold out — as
-reported by Village, whose flags often lag real availability.
+Home streams via torrents (needs rqbit: brew install rqbit) and refuses to
+play unless a full-tunnel VPN is your default route — connect one with its
+kill switch on. showtimes: cyan = on sale, yellow = few seats, red ✗ = sold
+out — as reported by Village, whose flags often lag real availability.
 piped output (cine | cat) prints a plain list instead of the TUI.`;
 
 // ---------------------------------------------------------------------------
@@ -1176,7 +1180,21 @@ const state = {
   detailToken: 0,
   posterPaths: new Map<string, string | null>(),
   grid: { scroll: 0, perRow: 1, viewRows: 1, pCols: 16, cellW: 19, cellH: 14 },
+  // "out or in" hub: Cinemas (Village) vs Home (stream anything into IINA)
+  tab: "cinemas" as "cinemas" | "home",
+  homeMovies: [] as Movie[],
+  mode: "normal" as "normal" | "search",
+  searchBuf: "",
+  overlay: null as null | "confirm" | "vpn",
+  overlayLines: [] as string[],
+  pending: null as Torrent | null,
+  noVpnCheck: false,
 };
+
+/** The movie list for the active tab (Home search results, or Village grid). */
+function listMovies(): Movie[] {
+  return state.tab === "home" ? state.homeMovies : gridMovies();
+}
 
 function out(s: string) {
   process.stdout.write(s);
@@ -1246,11 +1264,25 @@ function renderStatus(msg: string) {
   out(`\x1b[${Math.floor(rows / 2)};1H` + center(`${A.cyan}${msg}${A.reset}`, cols));
 }
 
+function tabBar(): string {
+  const chip = (name: string, active: boolean) =>
+    active ? `${A.inv}${A.bold} ${name} ${A.reset}` : `${A.grey} ${name} ${A.reset}`;
+  return `${chip("Cinemas", state.tab === "cinemas")}${chip("Home", state.tab === "home")}`;
+}
+
 function header(cols: number): string {
-  const left = ` ${A.bold}${A.cyan}CINE${A.reset}  ${A.bold}${state.cinemaName}${A.reset}`;
+  const ctx =
+    state.tab === "cinemas"
+      ? state.cinemaName
+      : state.homeMovies.length
+        ? "search results"
+        : "press / to search";
+  const left = ` ${A.bold}${A.cyan}CINE${A.reset} ${tabBar()}  ${A.bold}${ctx}${A.reset}`;
   const right = state.flash
     ? `${A.yellow}${state.flash}${A.reset}`
-    : `${A.grey}${gridMovies().length} movies · sorted by ${SORT_LABELS[state.sort]}${A.reset}`;
+    : state.tab === "cinemas"
+      ? `${A.grey}${gridMovies().length} movies · sorted by ${SORT_LABELS[state.sort]}${A.reset}`
+      : `${A.grey}${state.homeMovies.length} results · ⇥ switch tab${A.reset}`;
   const pad = Math.max(1, cols - visLen(left) - visLen(right) - 2);
   return left + " ".repeat(pad) + right + "\n" + A.grey + "─".repeat(cols) + A.reset + "\n";
 }
@@ -1286,9 +1318,12 @@ function renderList() {
   const rows = process.stdout.rows || 24;
   let buf = header(cols);
 
-  const list = gridMovies();
+  const list = listMovies();
   if (state.sel >= list.length) state.sel = Math.max(0, list.length - 1);
-  if (!list.length) buf += "\n" + center(`${A.dim}No upcoming screenings.${A.reset}`, cols);
+  if (!list.length) {
+    const msg = state.tab === "home" ? "Press / to search, then ⏎ to play." : "No upcoming screenings.";
+    buf += "\n" + center(`${A.dim}${msg}${A.reset}`, cols);
+  }
 
   const pCols = posterCellCols(null, GRID_POSTER_ROWS);
   const cellW = pCols + 3; // poster + gap
@@ -1325,18 +1360,41 @@ function renderList() {
     buf += cellText(idx, movie, idx === state.sel);
   }
 
-  const hints = ` ↑↓←→ move · ⏎ details · s sort · w watch · t trailer · b book · p prices · c cinema · r refresh · q quit`;
-  buf += `\x1b[${rows};1H${A.grey}${truncate(hints, cols - 1)}${A.reset}`;
+  const homeHints = ` ⇥ tab · ↑↓←→ move · ⏎ details · / search · p play · v vpn · q quit`;
+  const cineHints = ` ⇥ tab · ↑↓←→ move · ⏎ details · s sort · w watch · t trailer · b book · p prices · c cinema · r refresh · q quit`;
+  const bottom =
+    state.mode === "search"
+      ? `${A.cyan} /${state.searchBuf}${A.reset}${A.grey}▏  ⏎ search · esc cancel${A.reset}`
+      : `${A.grey}${truncate(state.tab === "home" ? homeHints : cineHints, cols - 1)}${A.reset}`;
+  buf += `\x1b[${rows};1H${bottom}`;
   out(buf);
 
   for (const p of posters) drawPoster(p.png, p.y, p.x, GRID_POSTER_ROWS, state.grid.pCols);
 
   if (state.showPrices) renderPrices(cols, rows);
+  if (state.overlay) renderOverlay(cols, rows);
+}
+
+/** Centered box drawn over the grid (stream confirm / VPN status). */
+function renderOverlay(cols: number, rows: number) {
+  const lines = state.overlayLines;
+  const innerW = Math.min(cols - 6, Math.max(24, ...lines.map(visLen)));
+  const w = innerW + 4;
+  const top = Math.max(2, Math.floor((rows - lines.length - 2) / 2));
+  const left = Math.max(1, Math.floor((cols - w) / 2));
+  const bar = "─".repeat(w - 2);
+  out(`\x1b[${top};${left}H${A.cyan}┌${bar}┐${A.reset}`);
+  lines.forEach((l, i) => {
+    const t = truncate(l, innerW);
+    const pad = " ".repeat(Math.max(0, innerW - visLen(t)));
+    out(`\x1b[${top + 1 + i};${left}H${A.cyan}│${A.reset} ${t}${pad} ${A.cyan}│${A.reset}`);
+  });
+  out(`\x1b[${top + 1 + lines.length};${left}H${A.cyan}└${bar}┘${A.reset}`);
 }
 
 /** Move the grid selection, repainting only text when the window doesn't scroll. */
 function moveSelection(newSel: number) {
-  const list = gridMovies();
+  const list = listMovies();
   const clamped = Math.max(0, Math.min(list.length - 1, newSel));
   if (clamped === state.sel) return;
   const g = state.grid;
@@ -1363,12 +1421,19 @@ async function renderDetail() {
   clearScreen();
   const cols = process.stdout.columns || 80;
   const rows = process.stdout.rows || 24;
-  const m = gridMovies()[state.sel];
+  const m = listMovies()[state.sel];
   if (!m) {
     state.view = "list";
     return renderList();
   }
   const token = ++state.detailToken;
+
+  // Home titles fetch rating/plot/runtime lazily, then repaint if still shown
+  if (state.tab === "home" && !m.enriched) {
+    enrichHome(m).then(() => {
+      if (token === state.detailToken && state.view === "detail") renderDetail();
+    });
+  }
 
   const posterRows = Math.min(rows - 8, 18);
   let textCol = 3;
@@ -1381,7 +1446,10 @@ async function renderDetail() {
   const textW = Math.max(20, cols - textCol - 2);
   const lines: string[] = [];
   lines.push(`${A.bold}${m.title}${A.reset}  ${ratingStr(m)}${m.votes ? ` ${A.grey}(${m.votes.toLocaleString("en")} votes)${A.reset}` : ""}`);
-  lines.push(`${A.grey}${m.minutes}′ · ${m.genre}${m.pg ? ` · ${m.pg}` : ""}${A.reset}`);
+  const meta = [state.tab === "home" && m.year ? String(m.year) : "", m.minutes ? `${m.minutes}′` : "", m.genre, m.pg]
+    .filter(Boolean)
+    .join(" · ");
+  if (meta) lines.push(`${A.grey}${meta}${A.reset}`);
   const rtLines = rtBlock(m, textW);
   if (rtLines.length) {
     lines.push("");
@@ -1393,24 +1461,30 @@ async function renderDetail() {
     lines.push(...wrap(plot, textW).map((l) => `${A.dim}${l}${A.reset}`));
     lines.push("");
   }
-  const today = isoDay(new Date());
-  for (const day of state.dayList) {
-    const times = m.days[day];
-    if (!times?.length) continue;
+  if (state.tab === "home") {
     lines.push(
-      `${A.bold}${fmtDay(day, today)}${A.reset}  ` + times.map(showtimeStr).join("  "),
+      `${A.cyan}${A.bold}▶ p${A.reset}  ${A.grey}stream to IINA${vpnActive() ? "" : `  ${A.yellow}(VPN off — press v)${A.grey}`}${A.reset}`,
     );
+    lines.push("");
+  } else {
+    const today = isoDay(new Date());
+    for (const day of state.dayList) {
+      const times = m.days[day];
+      if (!times?.length) continue;
+      lines.push(`${A.bold}${fmtDay(day, today)}${A.reset}  ` + times.map(showtimeStr).join("  "));
+    }
+    lines.push("");
   }
-  lines.push("");
   if (m.imdbUrl) lines.push(`${A.grey}imdb     ${m.imdbUrl}${A.reset}`);
   if (m.rt?.url) lines.push(`${A.grey}rotten   ${m.rt.url}${A.reset}`);
   if (m.trailer) lines.push(`${A.grey}trailer  ${m.trailer}${A.reset}`);
-  if (m.url) lines.push(`${A.grey}book     ${m.url}${A.reset}`);
+  if (m.url && state.tab === "cinemas") lines.push(`${A.grey}book     ${m.url}${A.reset}`);
 
   lines.slice(0, rows - 5).forEach((l, i) => {
     buf += `\x1b[${4 + i};${textCol}H${truncate(l, textW)}`;
   });
-  const hints = ` esc back · t trailer · b book · q quit`;
+  const hints =
+    state.tab === "home" ? ` esc back · p play · v vpn · b imdb · q quit` : ` esc back · t trailer · b book · q quit`;
   buf += `\x1b[${rows};1H${A.grey}${hints}${A.reset}`;
   out(buf);
 
@@ -1503,12 +1577,139 @@ function quit(): never {
   process.exit(0);
 }
 
+/** Fetch posters for Home results in the background, repainting as they land. */
+function prefetchHomePosters() {
+  for (const m of state.homeMovies) {
+    if (state.posterPaths.has(m.id)) continue;
+    ensurePoster(m).then((png) => {
+      state.posterPaths.set(m.id, png);
+      if (state.tab === "home" && state.view === "list") renderList();
+    });
+  }
+}
+
+/** VPN gate → resolve a magnet → confirm overlay. */
+async function startStream(m: Movie) {
+  if (!state.noVpnCheck && !vpnActive()) {
+    state.flash = "no VPN — connect a full-tunnel VPN (kill switch on) first";
+    return render();
+  }
+  state.flash = "finding a source…";
+  render();
+  const torrents = await resolveTorrents(m.title, m.year ?? 0);
+  state.flash = "";
+  if (!torrents.length) {
+    state.flash = "no torrent found for that title";
+    return render();
+  }
+  const t = torrents[0];
+  state.pending = t;
+  state.overlay = "confirm";
+  state.overlayLines = [
+    `${A.bold}${truncate(m.title, 40)}${A.reset}`,
+    "",
+    `${A.grey}size${A.reset}     ${t.size}`,
+    `${A.grey}seeders${A.reset}  ${t.seeders}`,
+    `${A.grey}source${A.reset}   ${t.source}`,
+    "",
+    `${A.yellow}torrenting — VPN required${A.reset}`,
+    `${A.bold}y${A.reset} play    ${A.grey}any other key cancels${A.reset}`,
+  ];
+  render();
+}
+
+async function confirmStream() {
+  const t = state.pending;
+  state.overlay = null;
+  state.pending = null;
+  if (!t) return render();
+  state.flash = "starting rqbit…";
+  render();
+  state.flash = await streamMagnet(t.magnet);
+  render();
+}
+
+async function showVpn() {
+  state.flash = "checking VPN…";
+  render();
+  const s = await vpnStatus();
+  state.flash = "";
+  state.overlay = "vpn";
+  state.overlayLines = [
+    `${A.bold}VPN status${A.reset}`,
+    "",
+    `${A.grey}route${A.reset}  ${s.iface ?? "?"}  ${s.tunnel ? `${A.green}tunnel ✓${A.reset}` : `${A.red}physical — exposed${A.reset}`}`,
+    `${A.grey}exit${A.reset}   ${s.org}`,
+    "",
+    `${A.grey}any key to close${A.reset}`,
+  ];
+  render();
+}
+
 async function handleKey(key: string) {
-  const list = gridMovies();
+  // overlays swallow the next keypress
+  if (state.overlay === "confirm") {
+    if (key === "y") return confirmStream();
+    state.overlay = null;
+    state.pending = null;
+    return render();
+  }
+  if (state.overlay === "vpn") {
+    state.overlay = null;
+    return render();
+  }
+
+  // search input mode (Home): typed keys build the query — note "q" types here,
+  // it doesn't quit, so this must come before the quit check below
+  if (state.mode === "search") {
+    if (key === "\r" || key === "\n") {
+      state.mode = "normal";
+      const q = state.searchBuf.trim();
+      if (q) {
+        state.flash = "searching…";
+        render();
+        state.homeMovies = await homeSearch(q);
+        state.sel = 0;
+        prefetchHomePosters();
+        state.flash = state.homeMovies.length ? "" : "no results";
+      }
+      return render();
+    }
+    if (key === "\x1b") {
+      state.mode = "normal";
+      return render();
+    }
+    if (key === "\x7f" || key === "\b") {
+      state.searchBuf = state.searchBuf.slice(0, -1);
+      return render();
+    }
+    if (key.length === 1 && key >= " ") {
+      state.searchBuf += key;
+      return render();
+    }
+    return;
+  }
+
+  const list = listMovies();
   const selMovie = list[state.sel];
   state.flash = ""; // any keypress clears the last flash message
 
   if (key === "\x03" || key === "q") quit();
+
+  // Tab switches Cinemas ⇄ Home
+  if (key === "\t") {
+    state.tab = state.tab === "cinemas" ? "home" : "cinemas";
+    state.view = "list";
+    state.sel = 0;
+    state.showPrices = false;
+    return render();
+  }
+  if (key === "v") return showVpn();
+  if (key === "/" && state.tab === "home") {
+    state.mode = "search";
+    state.searchBuf = "";
+    return render();
+  }
 
   if (state.view === "cinemas") {
     const n = Object.keys(CINEMAS).length;
@@ -1530,29 +1731,30 @@ async function handleKey(key: string) {
   }
   if (key === "t") return openUrl(selMovie?.trailer ?? "");
   if (key === "b") return openUrl(selMovie?.url ?? "");
-  if (key === "s") {
+  if (key === "p") {
+    if (state.tab === "home") return selMovie ? startStream(selMovie) : undefined;
+    state.showPrices = !state.showPrices;
+    return render();
+  }
+  if (key === "s" && state.tab === "cinemas") {
     state.sort = SORTS[(SORTS.indexOf(state.sort) + 1) % SORTS.length];
     saveConfig({ ...loadConfig(), sort: state.sort });
     sortMovies();
     state.sel = 0;
     return render();
   }
-  if (key === "w" && selMovie) {
+  if (key === "w" && selMovie && state.tab === "cinemas") {
     state.flash = "siren: syncing…";
     render();
     state.flash = await sirenToggle(selMovie.title);
     return render();
   }
-  if (key === "p") {
-    state.showPrices = !state.showPrices;
-    return render();
-  }
-  if (key === "c") {
+  if (key === "c" && state.tab === "cinemas") {
     state.view = "cinemas";
     state.cinemaSel = Math.max(0, Object.keys(CINEMAS).indexOf(state.cinemaId));
     return render();
   }
-  if (key === "r") {
+  if (key === "r" && state.tab === "cinemas") {
     state.view = "list";
     await loadData(state.cinemaId, true);
     return render();
@@ -1613,11 +1815,13 @@ async function main() {
       list: { type: "boolean" },
       clear: { type: "boolean" },
       "no-cache": { type: "boolean" },
+      "no-vpn-check": { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
   });
 
   if (values.help) return console.log(HELP);
+  state.noVpnCheck = Boolean(values["no-vpn-check"]);
 
   // siren subcommands: cine watch [title] [--imax] [-c id], cine unwatch <title>
   const [cmd, ...args] = positionals;
