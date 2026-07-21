@@ -58,7 +58,7 @@ Press `⇥` for **Stream** and cine stops caring about Athens. Type a title, hit
 |---|---|---|
 | 01 | **a landing, not a blank box** | opens on your recently-played titles above IMDB's trending movies and TV — one scrolling wall, labeled `── … ──` dividers |
 | 02 | **live search** | `/` and type; results stream in as you go (IMDB suggestion API, debounced) — no enter-to-search |
-| 03 | **source picker** | seeders, size, and a **quality** column parsed out of the release name (2160p · HDR · x265 · WEB-DL), highest-seeded first, across Knaben (movies/TV) + Nyaa (anime) |
+| 03 | **source picker** | seeders, size, and a **quality** column parsed out of the release name (2160p · HDR · x265 · WEB-DL), highest-seeded first, across Knaben (movies/TV) + Nyaa (anime — anime-only, so no anime bleeds into a TV search) — filtered to the show you actually asked for, so `House` returns *House*, not `House of the Dragon` |
 | 04 | **buffering feedback** | after you pick, cine buffers the file head (showing MB · speed) before handing the URL to IINA — so playback starts instead of hanging on an empty stream |
 | 05 | **tv & anime browser** | series open a season/episode browser (IMDB GraphQL); anime is detected via AniList and numbered the way Nyaa releases it — romaji + episode, not `SxxEyy`. Each episode is searched under every AniList title (romaji · english · synonyms, so `DAN DA DAN` is found, not just `Dandadan`), padded and unpadded; still-airing shows work; `--dub` prefers dual-audio |
 | 06 | **watched & resume** | `✓` on episodes you've streamed, selection jumps to the next unwatched one, `n` plays the next episode without reopening the picker |

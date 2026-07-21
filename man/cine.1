@@ -70,8 +70,11 @@ via
 A series steps through season then episode first (SxxEyy for TV, romaji plus
 number for anime); a season-pack source adds one more
 .BR fzf (1)
-step to choose the file. Anime episodes are searched under every AniList title
-variant (romaji, english, synonyms) in padded and unpadded form for more hits;
+step to choose the file. Sources are filtered to the show actually asked for,
+so a generic title (\fBHouse\fR) does not match a longer one
+(\fBHouse of the Dragon\fR). Anime episodes are searched under every AniList
+title variant (romaji, english, synonyms) in padded and unpadded form for more
+hits;
 .B \-\-dub
 prefers dual-audio releases. Needs
 .BR fzf (1),
