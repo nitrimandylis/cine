@@ -36,9 +36,12 @@ binary (`bun run compile` → `~/.bun/bin/cine`) with a man page.
   never require touching GitHub Actions.
 - Piped output falls back to a plain text list for scripting.
 - **Streaming hub:** `⇥` switches Cinemas ⇄ Home. Home reuses the poster
-  grid/detail to search any title (IMDB suggestion), then `p` streams it into
-  IINA — magnets from Knaben (movies/TV) + Nyaa (anime), played via `rqbit`'s
-  HTTP stream endpoint. Needs `rqbit` (`brew install rqbit`).
+  grid/detail to search any title (IMDB suggestion), then `p` opens a source
+  picker (seeders/size/source) and streams the chosen magnet into IINA —
+  sources from Knaben (movies/TV) + Nyaa (anime), played via `rqbit`'s HTTP
+  stream endpoint. Subtitle files shipped in the torrent are auto-attached to
+  IINA (English first); embedded MKV subs work natively. Needs `rqbit`
+  (`brew install rqbit`).
 - Flags: `-c`, `-d DD/MM`, `--list`, `--clear`, `--no-cache`.
 
 ## Where it's headed

@@ -20,8 +20,27 @@ import {
   parseNyaaRss,
   humanSize,
   pickVideoFile,
+  pickSubtitles,
   parseSuggestions,
 } from "./cine";
+
+test("pickSubtitles finds sub files, English first, ignores video", () => {
+  const files = [
+    { name: "movie.mkv", length: 8_000_000_000 },
+    { name: "movie.es.srt", length: 40_000 },
+    { name: "movie.en.srt", length: 42_000 },
+    { name: "poster.jpg", length: 200_000 },
+    { components: ["subs", "English.ass"], length: 50_000 },
+  ];
+  const subs = pickSubtitles(files);
+  expect(subs).toContain(1); // es
+  expect(subs).toContain(2); // en
+  expect(subs).toContain(4); // English.ass
+  expect(subs).not.toContain(0); // video excluded
+  // an English sub is first (IINA loads the first as default)
+  expect([2, 4]).toContain(subs[0]);
+  expect(pickSubtitles([{ name: "movie.mp4", length: 1 }])).toEqual([]);
+});
 
 test("parseSuggestions keeps watchable titles and drops people/games", () => {
   const out = parseSuggestions([

@@ -1043,20 +1043,38 @@ const RQBIT_ADDR = "127.0.0.1:3030";
 const RQBIT_BASE = `http://${RQBIT_ADDR}`;
 const RQBIT_DIR = join(CACHE_DIR, "torrents");
 const VIDEO_EXT = /\.(mkv|mp4|avi|webm|mov|m4v|ts)$/i;
+const SUB_EXT = /\.(srt|ass|ssa|sub|vtt)$/i;
+
+type RqFile = { name?: string; components?: string[]; length?: number };
+
+function fileName(f: RqFile): string {
+  return f.name ?? f.components?.join("/") ?? "";
+}
 
 /** Index of the largest video file in a torrent, or -1 if none. Pure. */
-export function pickVideoFile(files: { name?: string; components?: string[]; length?: number }[]): number {
+export function pickVideoFile(files: RqFile[]): number {
   let best = -1;
   let bestLen = -1;
   files.forEach((f, i) => {
-    const name = f.name ?? f.components?.join("/") ?? "";
     const len = f.length ?? 0;
-    if (VIDEO_EXT.test(name) && len > bestLen) {
+    if (VIDEO_EXT.test(fileName(f)) && len > bestLen) {
       best = i;
       bestLen = len;
     }
   });
   return best;
+}
+
+/** Indices of subtitle files shipped in the torrent, English first, capped.
+ *  IINA loads the first as the default track; the rest are selectable. Pure. */
+export function pickSubtitles(files: RqFile[]): number[] {
+  const isEng = (n: string) => /\b(en|eng|english)\b/i.test(n) || /\.en\./i.test(n);
+  return files
+    .map((f, i) => ({ i, name: fileName(f) }))
+    .filter((x) => SUB_EXT.test(x.name))
+    .sort((a, b) => (isEng(b.name) ? 1 : 0) - (isEng(a.name) ? 1 : 0))
+    .slice(0, 6)
+    .map((x) => x.i);
 }
 
 function rqbitInstalled(): boolean {
@@ -1090,7 +1108,7 @@ async function ensureRqbit(): Promise<boolean> {
 /** Add a magnet, return the torrent id + chosen video file index. The POST
  *  blocks while rqbit resolves metadata from peers, so cap it — a dead magnet
  *  would otherwise hang forever. */
-async function rqbitAdd(magnet: string): Promise<{ id: number; fileIdx: number } | null> {
+async function rqbitAdd(magnet: string): Promise<{ id: number; fileIdx: number; subIdx: number[] } | null> {
   try {
     const res = await fetch(`${RQBIT_BASE}/torrents?overwrite=true`, {
       method: "POST",
@@ -1099,19 +1117,28 @@ async function rqbitAdd(magnet: string): Promise<{ id: number; fileIdx: number }
     });
     if (!res.ok) return null;
     const j: any = await res.json();
-    const fileIdx = pickVideoFile(j.details?.files ?? []);
+    const files = j.details?.files ?? [];
+    const fileIdx = pickVideoFile(files);
     if (fileIdx < 0) return null;
-    return { id: j.id, fileIdx };
+    return { id: j.id, fileIdx, subIdx: pickSubtitles(files) };
   } catch {
     return null;
   }
 }
 
-/** Open a URL in IINA. Prefer IINA's own `iina` CLI, which actually loads the
- *  stream — `open -a IINA <httpURL>` tends to just foreground the app. */
-function openInIina(url: string) {
+/** Open a video URL in IINA, attaching any subtitle URLs as extra tracks.
+ *  Prefer IINA's own `iina` CLI, which actually loads the stream (and can take
+ *  mpv options) — `open -a IINA <httpURL>` tends to just foreground the app. */
+function openInIina(videoUrl: string, subUrls: string[]) {
   const hasCli = Bun.spawnSync(["which", "iina"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
-  const cmd = hasCli ? ["iina", "--no-stdin", url] : ["open", "-a", "IINA", url];
+  if (!hasCli) {
+    // fallback can't attach subs, but embedded (MKV) tracks still work
+    Bun.spawn(["open", "-a", "IINA", videoUrl], { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
+    return;
+  }
+  const cmd = ["iina", "--no-stdin"];
+  for (const u of subUrls) cmd.push(`--mpv-sub-files-append=${u}`);
+  cmd.push(videoUrl);
   Bun.spawn(cmd, { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
 }
 
@@ -1121,8 +1148,11 @@ async function streamMagnet(magnet: string): Promise<string> {
   if (!(await ensureRqbit())) return "couldn't start rqbit server";
   const added = await rqbitAdd(magnet);
   if (!added) return "source has no seeds or no video — try another";
-  openInIina(`${RQBIT_BASE}/torrents/${added.id}/stream/${added.fileIdx}`);
-  return "streaming → IINA (give it a few seconds)";
+  const base = `${RQBIT_BASE}/torrents/${added.id}/stream`;
+  openInIina(`${base}/${added.fileIdx}`, added.subIdx.map((i) => `${base}/${i}`));
+  return added.subIdx.length
+    ? `streaming → IINA (${added.subIdx.length} subtitle${added.subIdx.length > 1 ? "s" : ""})`
+    : "streaming → IINA (embedded subs if any)";
 }
 
 // ---------------------------------------------------------------------------
