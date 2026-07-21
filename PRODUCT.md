@@ -39,7 +39,28 @@ binary (`bun run compile` → `~/.bun/bin/cine`) with a man page.
 
 ## Where it's headed
 
-- Nothing planned. Candidates if wanted: other chains (Odeon/Cinepolis),
+- **Streaming hub (in design, spec: `docs/superpowers/specs/2026-07-21-streaming-hub-design.md`).**
+  `Tab` switches Cinemas ⇄ Home. Home reuses the poster grid/detail to browse
+  any title and stream it into IINA. Torrent-native (not streaming-site
+  scrapers, which are a dead/daily-breaking arms race): magnets from Knaben
+  (movies/TV) + Nyaa (anime), played via `rqbit`'s HTTP stream endpoint. A magnet
+  is a content hash, so near-zero maintenance.
+- **VPN safety — Level 0 (shipping):** cine refuses to stream unless a
+  full-tunnel VPN is the default route (checked via `route get default`; a bare
+  `utun` doesn't count — macOS keeps idle ones). `--no-vpn-check` overrides.
+  `v` shows interface + public-IP org. cine stays VPN-agnostic; the drop-leak
+  case relies on the user's own kill switch.
+- **VPN safety — Level 1 (planned):** cine brings the tunnel up itself so there's
+  no manual step — `wg-quick up` on launch / first stream, `down` on exit. Needs
+  a one-time `NOPASSWD` sudoers line for that one command (route changes need
+  root). The ideal end state: launch cine → VPN is up → hit `p` → IINA plays, no
+  hassle, no exposure.
+- **VPN safety — per-app routing (wishlist, OS-limited):** route *only* IINA's
+  traffic through the VPN and leave the rest of the Mac direct. macOS has no
+  clean per-app VPN routing (a Linux netns trick), and Proton's macOS
+  split-tunnelling is spotty — so this stays full-tunnel-while-streaming until
+  the OS story improves. Recorded as an ideal, not a simple TODO.
+- Other candidates if wanted: other chains (Odeon/Cinepolis),
   publishing the repo.
 - Ruled out: full seat maps — Village's addtickets step rejects requests
   without a reCAPTCHA Enterprise token (verified: HTTP 400), and the seat
