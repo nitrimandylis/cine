@@ -39,9 +39,10 @@ binary (`bun run compile` → `~/.bun/bin/cine`) with a man page.
   grid/detail to search any title (IMDB suggestion), then `p` opens a source
   picker (seeders/size/source) and streams the chosen magnet into IINA —
   sources from Knaben (movies/TV) + Nyaa (anime), played via `rqbit`'s HTTP
-  stream endpoint. Subtitle files shipped in the torrent are auto-attached to
-  IINA (English first); embedded MKV subs work natively. Needs `rqbit`
-  (`brew install rqbit`).
+  stream endpoint. Subtitles: an English `.srt` is fetched by IMDB id from
+  yifysubtitles (keyless, cached in `~/.cache/cine/subs/`) for any movie, plus
+  any `.srt` shipped in the torrent, plus embedded MKV tracks — all attached to
+  IINA (external English first). Needs `rqbit` (`brew install rqbit`).
 - Flags: `-c`, `-d DD/MM`, `--list`, `--clear`, `--no-cache`.
 
 ## Where it's headed

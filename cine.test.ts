@@ -22,7 +22,18 @@ import {
   pickVideoFile,
   pickSubtitles,
   parseSuggestions,
+  parseYifyEnglish,
 } from "./cine";
+
+test("parseYifyEnglish picks the English row, not a title containing 'english'", () => {
+  const html = `
+    <tr><td class="flag-cell"></td><td><span class="sub-lang">Arabic</span></td>
+        <td><a href="/subtitles/the-english-patient-1996-arabic-yify-111">x</a></td></tr>
+    <tr><td class="flag-cell"></td><td><span class="sub-lang">English</span></td>
+        <td><a href="/subtitles/the-english-patient-1996-english-yify-222">x</a></td></tr>`;
+  expect(parseYifyEnglish(html)).toBe("the-english-patient-1996-english-yify-222");
+  expect(parseYifyEnglish("<tr><span class=\"sub-lang\">French</span> nope</tr>")).toBeNull();
+});
 
 test("pickSubtitles finds sub files, English first, ignores video", () => {
   const files = [

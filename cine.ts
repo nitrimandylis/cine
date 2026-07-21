@@ -10,7 +10,7 @@
  */
 
 import { parseArgs } from "node:util";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -1077,6 +1077,66 @@ export function pickSubtitles(files: RqFile[]): number[] {
     .map((x) => x.i);
 }
 
+// ---------------------------------------------------------------------------
+// External subtitles — for releases that ship none, fetch an English .srt from
+// yifysubtitles (keyless, by IMDB id) and attach it. Movies only; TV/anime
+// fall back to torrent/embedded subs.
+// ---------------------------------------------------------------------------
+
+const SUBS_DIR = join(CACHE_DIR, "subs");
+const YIFY_BASE = "https://yifysubtitles.ch";
+
+/** First English subtitle slug on a yifysubtitles movie page. Matches by the
+ *  row's language cell, not the slug text, so titles containing "english"
+ *  (e.g. The English Patient) don't mismatch. Pure. */
+export function parseYifyEnglish(html: string): string | null {
+  for (const row of html.split(/<tr\b/i)) {
+    if (/sub-lang">\s*English\b/i.test(row)) {
+      const href = row.match(/href="\/subtitles\/([^"]+)"/);
+      if (href) return href[1];
+    }
+  }
+  return null;
+}
+
+/** Download + cache an English .srt for an IMDB id; returns its local path. */
+async function fetchExternalSub(imdbId: string): Promise<string | null> {
+  if (!/^tt\d+$/.test(imdbId)) return null;
+  mkdirSync(SUBS_DIR, { recursive: true });
+  const srt = join(SUBS_DIR, `${imdbId}.srt`);
+  if (existsSync(srt)) return srt;
+  try {
+    const page = await fetch(`${YIFY_BASE}/movie-imdb/${imdbId}`, {
+      headers: { "User-Agent": UA },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!page.ok) return null;
+    const slug = parseYifyEnglish(await page.text());
+    if (!slug) return null;
+    // the zip download rejects hotlinks — the detail page must be the Referer
+    const zip = await fetch(`${YIFY_BASE}/subtitle/${slug}.zip`, {
+      headers: { "User-Agent": UA, Referer: `${YIFY_BASE}/subtitles/${slug}` },
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!zip.ok) return null;
+    const zipPath = join(SUBS_DIR, `${imdbId}.zip`);
+    writeFileSync(zipPath, new Uint8Array(await zip.arrayBuffer()));
+    const dir = join(SUBS_DIR, imdbId);
+    Bun.spawnSync(["unzip", "-o", "-j", zipPath, "-d", dir], { stdout: "ignore", stderr: "ignore" });
+    rmSync(zipPath, { force: true });
+    const file = readdirSync(dir).find((f) => f.toLowerCase().endsWith(".srt"));
+    if (!file) {
+      rmSync(dir, { recursive: true, force: true });
+      return null;
+    }
+    renameSync(join(dir, file), srt);
+    rmSync(dir, { recursive: true, force: true });
+    return srt;
+  } catch {
+    return null;
+  }
+}
+
 function rqbitInstalled(): boolean {
   return Bun.spawnSync(["which", "rqbit"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
 }
@@ -1142,16 +1202,20 @@ function openInIina(videoUrl: string, subUrls: string[]) {
   Bun.spawn(cmd, { stdout: "ignore", stderr: "ignore", stdin: "ignore" });
 }
 
-/** Resolve → add → open in IINA. Returns a human status message. */
-async function streamMagnet(magnet: string): Promise<string> {
+/** Resolve → add → fetch subs → open in IINA. Returns a human status message. */
+async function streamMagnet(magnet: string, imdbId: string): Promise<string> {
   if (!rqbitInstalled()) return "rqbit not found — run: brew install rqbit";
   if (!(await ensureRqbit())) return "couldn't start rqbit server";
   const added = await rqbitAdd(magnet);
   if (!added) return "source has no seeds or no video — try another";
   const base = `${RQBIT_BASE}/torrents/${added.id}/stream`;
-  openInIina(`${base}/${added.fileIdx}`, added.subIdx.map((i) => `${base}/${i}`));
-  return added.subIdx.length
-    ? `streaming → IINA (${added.subIdx.length} subtitle${added.subIdx.length > 1 ? "s" : ""})`
+  const subs = added.subIdx.map((i) => `${base}/${i}`);
+  // external English .srt first so IINA loads it as the default track
+  const external = await fetchExternalSub(imdbId);
+  if (external) subs.unshift(external);
+  openInIina(`${base}/${added.fileIdx}`, subs);
+  return subs.length
+    ? `streaming → IINA (${subs.length} subtitle${subs.length > 1 ? "s" : ""})`
     : "streaming → IINA (embedded subs if any)";
 }
 
@@ -1188,6 +1252,7 @@ const state = {
   picks: [] as Torrent[],
   pickSel: 0,
   pickTitle: "",
+  pickImdb: "",
 };
 
 /** The movie list for the active tab (Home search results, or Village grid). */
@@ -1628,15 +1693,16 @@ async function startStream(m: Movie) {
   state.picks = torrents.slice(0, 25);
   state.pickSel = 0;
   state.pickTitle = m.title;
+  state.pickImdb = m.id;
   state.overlay = "picker";
   state.overlayLines = buildPickerLines();
   render();
 }
 
 async function playPick(t: Torrent) {
-  state.flash = "starting rqbit…";
+  state.flash = "starting stream + subtitles…";
   render();
-  state.flash = await streamMagnet(t.magnet);
+  state.flash = await streamMagnet(t.magnet, state.pickImdb);
   render();
 }
 
