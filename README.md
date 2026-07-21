@@ -60,7 +60,7 @@ Press `⇥` for **Stream** and cine stops caring about Athens. Type a title, hit
 | 02 | **live search** | `/` and type; results stream in as you go (IMDB suggestion API, debounced) — no enter-to-search |
 | 03 | **source picker** | seeders, size, and a **quality** column parsed out of the release name (2160p · HDR · x265 · WEB-DL), highest-seeded first, across Knaben (movies/TV) + Nyaa (anime) |
 | 04 | **buffering feedback** | after you pick, cine buffers the file head (showing MB · speed) before handing the URL to IINA — so playback starts instead of hanging on an empty stream |
-| 05 | **tv & anime browser** | series open a season/episode browser (IMDB GraphQL); anime is detected via AniList and numbered the way Nyaa releases it — romaji + episode, not `SxxEyy` |
+| 05 | **tv & anime browser** | series open a season/episode browser (IMDB GraphQL); anime is detected via AniList and numbered the way Nyaa releases it — romaji + episode, not `SxxEyy`. Each episode is searched under every AniList title (romaji · english · synonyms, so `DAN DA DAN` is found, not just `Dandadan`), padded and unpadded; still-airing shows work; `--dub` prefers dual-audio |
 | 06 | **watched & resume** | `✓` on episodes you've streamed, selection jumps to the next unwatched one, `n` plays the next episode without reopening the picker |
 | 07 | **subtitles, handled** | external English `.srt` by IMDB id (yifysubtitles), plus any subs shipped in the torrent, plus embedded MKV tracks — all attached to IINA, English first |
 
@@ -79,6 +79,11 @@ nick@cine:~$ cine stream severance
   season>  Season 2
   episode> S02E07  Chikhai Bardo · 9.1
   source>  312▲   2.4 GiB  1080p WEB-DL    knaben   Severance.S02E07.1080p...
+
+nick@cine:~$ cine stream dandadan --dub
+  title>    DAN DA DAN (2024)  ·  TV
+  episode>    3
+  source>   75▲   1.4 GiB  1080p WEB-DL    nyaa     [Group] DAN DA DAN - 03 (Dual Audio)...
 ```
 
 > Streaming needs [`rqbit`](https://github.com/ikatson/rqbit) (`brew install rqbit`) and [IINA](https://iina.io); the `stream` command also needs [`fzf`](https://github.com/junegunn/fzf) (`brew install fzf`). Village works without any of them.

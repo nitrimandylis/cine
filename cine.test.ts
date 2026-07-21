@@ -26,6 +26,8 @@ import {
   parseSeasons,
   parseEpisodes,
   parseAnime,
+  animeTitles,
+  animeQueries,
   nyaaTitle,
   parseQuality,
   qualityLabel,
@@ -57,6 +59,23 @@ test("parseAnime maps AniList streaming titles by episode number", () => {
     },
   };
   expect(parseAnime(j)?.titles).toEqual({ 1: "The Journey's End", 2: "It Didn't Have to Be Magic" });
+});
+
+test("parseAnime falls back to aired count for still-airing shows (episodes null)", () => {
+  const j = { data: { Media: { title: { romaji: "Ongoing Show" }, episodes: null, nextAiringEpisode: { episode: 8 } } } };
+  expect(parseAnime(j)?.episodes).toBe(7); // 7 aired; episode 8 is next/unaired
+});
+
+test("animeTitles de-dupes, strips season descriptors, and drops non-Latin titles", () => {
+  const a = { romaji: "Sousou no Frieren 2nd Season", episodes: 12, titles: {}, english: "Frieren: Beyond Journey's End", synonyms: ["Frieren", "Frieren 2nd Season", "장송의 프리렌"] };
+  // "Frieren 2nd Season" cleans to "Frieren" (dup, dropped); Korean title dropped (0 hits on Nyaa)
+  expect(animeTitles(a)).toEqual(["Sousou no Frieren", "Frieren: Beyond Journey's End", "Frieren"]);
+});
+
+test("animeQueries builds padded + unpadded number variants, dub swaps the term", () => {
+  expect(animeQueries(["Frieren"], 5, false)).toEqual(["Frieren 05", "Frieren 5"]);
+  expect(animeQueries(["Frieren"], 12, false)).toEqual(["Frieren 12"]); // no unpadded dup
+  expect(animeQueries(["Frieren"], 5, true)).toEqual(["Frieren 05 dual audio", "Frieren 5 dual audio"]);
 });
 
 test("parseQuality pulls resolution/HDR/codec/source out of release names", () => {

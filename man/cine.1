@@ -50,6 +50,11 @@ Clear the cache for the selected cinema before fetching.
 .B \-\-no\-cache
 Ignore the cache and always fetch fresh data.
 .TP
+.BR \-\-dub ", " \-\-sub
+For anime, prefer dual-audio (dub) torrents, or subbed (the default). Affects
+both the Stream tab and
+.BR "cine stream" .
+.TP
 .BR \-h ", " \-\-help
 Show help.
 .SH COMMANDS
@@ -65,7 +70,10 @@ via
 A series steps through season then episode first (SxxEyy for TV, romaji plus
 number for anime); a season-pack source adds one more
 .BR fzf (1)
-step to choose the file. Needs
+step to choose the file. Anime episodes are searched under every AniList title
+variant (romaji, english, synonyms) in padded and unpadded form for more hits;
+.B \-\-dub
+prefers dual-audio releases. Needs
 .BR fzf (1),
 .BR rqbit (1),
 and IINA installed.

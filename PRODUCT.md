@@ -71,7 +71,20 @@ binary (`bun run compile` → `~/.bun/bin/cine`) with a man page.
   over the torrent's files. Same `rqbit` head-buffer + IINA handoff and history
   recording (episode saved for resume) as the tab. Needs `fzf` alongside
   `rqbit`/IINA (each checked with a clear error).
-- Flags: `-c`, `-d DD/MM`, `--list`, `--clear`, `--no-cache`.
+- **Anime search overhaul** (both TUI and `cine stream`): AniList now supplies
+  every title variant (romaji + english + synonyms), and each anime episode is
+  searched under all of them — non-Latin variants dropped since Nyaa's
+  English-translated category never matches them — in padded *and* unpadded form
+  (`DAN DA DAN 03` / `DAN DA DAN 3`). This fixes the big miss where a show's
+  romaji (`Dandadan`, ~7 hits) differs from the fansub name (`DAN DA DAN`, ~75).
+  Still-airing shows work too: a null AniList `episodes` falls back to
+  `nextAiringEpisode - 1` instead of dropping to the (wrong-for-anime) IMDB
+  `SxxEyy` path. `--dub`/`--sub` picks dual-audio vs subbed (default sub);
+  `--dub` is a "dual audio" search-term heuristic, since torrent dub naming
+  isn't consistent. AllAnime-style direct streaming was ruled out — its API is
+  now Cloudflare- and crypto-gated (`AA_CRYPTO_MISSING`), the exact scraper
+  treadmill cine avoids.
+- Flags: `-c`, `-d DD/MM`, `--list`, `--clear`, `--no-cache`, `--dub`/`--sub`.
 
 ## Where it's headed
 

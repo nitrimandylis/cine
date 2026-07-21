@@ -67,6 +67,7 @@ usage:
 
 stream (skip the TUI — fzf a title, fzf a source, play in IINA):
   cine stream <title>            e.g. cine stream dune
+  cine stream <title> --dub      prefer dual-audio anime torrents (default: sub)
                                  needs fzf, rqbit, and IINA installed
 
 siren (ticket alerts via github.com/nitrimandylis/siren):
@@ -1097,11 +1098,19 @@ function magnetHash(magnet: string): string {
 }
 
 /** Query both indexers and merge by seeders — Knaben covers movies/TV, Nyaa
- *  covers anime, so no content classifier is needed. Highest-seeded first. */
-async function resolveTorrents(knabenQuery: string, nyaaQuery: string = knabenQuery): Promise<Torrent[]> {
-  const [movies, anime] = await Promise.all([knabenSearch(knabenQuery), nyaaSearch(nyaaQuery)]);
+ *  covers anime, so no content classifier is needed. Each argument may be one
+ *  query or several (anime fans out over title/number variants); all run in
+ *  parallel and merge, de-duped by btih. Highest-seeded first. */
+async function resolveTorrents(
+  knaben: string | string[],
+  nyaa: string | string[] = knaben,
+): Promise<Torrent[]> {
+  const kq = [...new Set((Array.isArray(knaben) ? knaben : [knaben]).filter(Boolean))];
+  const nq = [...new Set((Array.isArray(nyaa) ? nyaa : [nyaa]).filter(Boolean))];
+  const results = await Promise.all([...kq.map(knabenSearch), ...nq.map(nyaaSearch)]);
   const seen = new Set<string>();
-  return [...movies, ...anime]
+  return results
+    .flat()
     .filter((t) => {
       const h = magnetHash(t.magnet);
       if (seen.has(h)) return false;
@@ -1220,20 +1229,34 @@ function sxxeyy(season: number, ep: number): string {
 // episode list + search terms from AniList instead.
 // ---------------------------------------------------------------------------
 
-type AnimeInfo = { romaji: string; episodes: number; titles: Record<number, string> };
+// english + synonyms feed extra torrent-search title variants (fansubbers name
+// releases inconsistently); undefined when absent so the shape stays minimal.
+type AnimeInfo = {
+  romaji: string;
+  episodes: number;
+  titles: Record<number, string>;
+  english?: string;
+  synonyms?: string[];
+};
 
 export function parseAnime(j: any): AnimeInfo | null {
   const m = j?.data?.Media;
   if (!m) return null;
   const romaji = m.title?.romaji || m.title?.english || "";
-  const episodes = typeof m.episodes === "number" ? m.episodes : 0;
+  // AniList leaves `episodes` null while a show is still airing; fall back to
+  // however many have aired (nextAiringEpisode is the NEXT, unaired one).
+  const aired = typeof m.nextAiringEpisode?.episode === "number" ? m.nextAiringEpisode.episode - 1 : 0;
+  const episodes = typeof m.episodes === "number" ? m.episodes : aired;
   // AniList streaming titles look like "Episode 5 - The Fight" — map by number
   const titles: Record<number, string> = {};
   for (const se of m.streamingEpisodes ?? []) {
     const mm = String(se?.title ?? "").match(/Episode\s+(\d+)\s*[-–—:]\s*(.+)/i);
     if (mm) titles[Number(mm[1])] = mm[2].trim();
   }
-  return romaji && episodes > 0 ? { romaji, episodes, titles } : null;
+  if (!romaji || episodes <= 0) return null;
+  const english = m.title?.english && m.title.english !== romaji ? m.title.english : undefined;
+  const synonyms = Array.isArray(m.synonyms) && m.synonyms.length ? m.synonyms : undefined;
+  return { romaji, episodes, titles, english, synonyms };
 }
 
 async function fetchAnime(title: string): Promise<AnimeInfo | null> {
@@ -1242,7 +1265,7 @@ async function fetchAnime(title: string): Promise<AnimeInfo | null> {
       method: "POST",
       headers: { "Content-Type": "application/json", "User-Agent": UA },
       body: JSON.stringify({
-        query: `query($q:String){Media(search:$q,type:ANIME){episodes title{romaji english} streamingEpisodes{title}}}`,
+        query: `query($q:String){Media(search:$q,type:ANIME){episodes synonyms title{romaji english} nextAiringEpisode{episode} streamingEpisodes{title}}}`,
         variables: { q: title },
       }),
     });
@@ -1251,6 +1274,41 @@ async function fetchAnime(title: string): Promise<AnimeInfo | null> {
   } catch {
     return null;
   }
+}
+
+// CJK / Thai / Hangul / Cyrillic / Arabic / Hebrew — Nyaa's English-translated
+// category names releases in Latin script, so titles in these scripts never hit.
+const NON_LATIN = /[Ѐ-ۿ֐-׿฀-๿぀-ヿ㐀-鿿가-힯]/;
+
+/** De-duped, cleaned title variants to search torrents for an anime: romaji +
+ *  english + AniList synonyms, season descriptors stripped to match fansub
+ *  naming. Non-Latin titles are dropped (0 hits on Nyaa) so the cap spends its
+ *  slots on searchable names. More titles = more hits. Pure. */
+export function animeTitles(a: AnimeInfo): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const t of [a.romaji, a.english ?? "", ...(a.synonyms ?? [])]) {
+    const clean = nyaaTitle(t);
+    const key = clean.toLowerCase();
+    if (clean && !NON_LATIN.test(clean) && /[a-z]/i.test(clean) && !seen.has(key)) {
+      seen.add(key);
+      out.push(clean);
+    }
+  }
+  return out.slice(0, 4);
+}
+
+/** Nyaa search queries for one anime episode: each title × padded-and-unpadded
+ *  number (fansubbers differ on zero-padding). `dub` swaps in a "dual audio"
+ *  term — a heuristic, since dub torrents aren't tagged consistently. Pure. */
+export function animeQueries(titles: string[], epNo: number, dub: boolean): string[] {
+  const pad = String(epNo).padStart(2, "0");
+  const nums = pad === String(epNo) ? [pad] : [pad, String(epNo)];
+  const out: string[] = [];
+  for (const t of titles) {
+    for (const n of nums) out.push(dub ? `${t} ${n} dual audio` : `${t} ${n}`);
+  }
+  return out.slice(0, 12);
 }
 
 /** Strip season descriptors so the romaji matches Nyaa's fansub naming
@@ -1493,6 +1551,10 @@ async function playFile(pack: Pack, fileIdx: number, imdbId: string): Promise<st
     : "streaming → IINA (embedded subs if any)";
 }
 
+// --dub prefers dual-audio anime torrents; default is sub. Set once at startup,
+// read by the anime query builder in both the TUI and the headless path.
+let dubMode = false;
+
 // ---------------------------------------------------------------------------
 // Headless streaming: `cine stream <query>` — pick a title, then a source, via
 // fzf, and hand it to IINA. Same pipeline as the Stream tab, no TUI. Like
@@ -1543,7 +1605,7 @@ async function streamCli(query: string) {
   // 2. a series → browse season/episode; a movie → title (+year). No IMDB match
   //    (raw "Show S01E05" query) → search the raw query, embedded subs only.
   let ep: { season: number; number: number } | null = null;
-  let knabenQ: string, nyaaQ: string;
+  let knabenQ: string | string[], nyaaQ: string | string[];
   if (movie && isSeries(movie)) {
     const sel = await pickEpisode(movie);
     if (!sel) return; // cancelled
@@ -1593,7 +1655,7 @@ async function streamCli(query: string) {
  *  + episode) like the TUI; regular TV uses IMDB seasons/episodes and SxxEyy. */
 async function pickEpisode(
   m: Movie,
-): Promise<{ knabenQ: string; nyaaQ: string; ep: { season: number; number: number } } | null> {
+): Promise<{ knabenQ: string | string[]; nyaaQ: string | string[]; ep: { season: number; number: number } } | null> {
   process.stderr.write("loading episodes…\r");
   const anime = await fetchAnime(m.title);
   process.stderr.write("\x1b[2K");
@@ -1602,11 +1664,9 @@ async function pickEpisode(
     const eps = Array.from({ length: anime.episodes }, (_, i) => ({ number: i + 1, title: anime.titles[i + 1] ?? "" }));
     const ep = await fzfPick(eps, (e) => `${String(e.number).padStart(3)}  ${e.title}`, "episode> ");
     if (!ep) return null;
-    const base = nyaaTitle(anime.romaji);
-    const pad = String(ep.number).padStart(2, "0");
     return {
       knabenQ: `${m.title} ${sxxeyy(1, ep.number)}`,
-      nyaaQ: `${base} ${pad}`,
+      nyaaQ: animeQueries(animeTitles(anime), ep.number, dubMode),
       ep: { season: 1, number: ep.number },
     };
   }
@@ -1653,6 +1713,7 @@ type SeriesState = {
   epSel: number;
   anime?: boolean; // numbered via AniList (flat, romaji search) instead of IMDB SxxEyy
   romaji?: string;
+  aTitles?: string[]; // romaji/english/synonym variants to search Nyaa for anime
 };
 
 const state = {
@@ -2311,7 +2372,12 @@ function buildPickerLines(): string[] {
 }
 
 /** Resolve sources for a query → source picker overlay (highest-seeded first). */
-async function startStreamFor(label: string, imdbId: string, knabenQuery: string, nyaaQuery: string) {
+async function startStreamFor(
+  label: string,
+  imdbId: string,
+  knabenQuery: string | string[],
+  nyaaQuery: string | string[],
+) {
   state.flash = "finding sources…";
   render();
   const torrents = await resolveTorrents(knabenQuery, nyaaQuery);
@@ -2344,10 +2410,14 @@ function streamEpisode(s: SeriesState) {
   state.pickMovie = listMovies()[state.sel] ?? historyToMovie({ id: s.imdbId, title: s.title, poster: "", kind: "tvSeries", ts: 0 });
   state.pickEp = { season: s.seasons[s.seasonIdx], number: ep.number };
   const tag = sxxeyy(s.seasons[s.seasonIdx], ep.number);
-  if (s.anime && s.romaji) {
+  if (s.anime && s.aTitles?.length) {
     const pad = String(ep.number).padStart(2, "0");
-    const base = nyaaTitle(s.romaji);
-    return startStreamFor(`${base} - ${pad}`, s.imdbId, `${s.title} ${tag}`, `${base} ${pad}`);
+    return startStreamFor(
+      `${s.aTitles[0]} - ${pad}`,
+      s.imdbId,
+      `${s.title} ${tag}`,
+      animeQueries(s.aTitles, ep.number, dubMode),
+    );
   }
   const q = `${s.title} ${tag}`;
   return startStreamFor(`${s.title} ${tag}`, s.imdbId, q, q);
@@ -2364,6 +2434,7 @@ async function loadSeries(m: Movie) {
   if (a) {
     s.anime = true;
     s.romaji = a.romaji;
+    s.aTitles = animeTitles(a);
     s.seasons = [1];
     s.episodes = Array.from({ length: a.episodes }, (_, i) => ({
       season: 1, number: i + 1, title: a.titles[i + 1] ?? "", rating: null,
@@ -2797,11 +2868,14 @@ async function main() {
       list: { type: "boolean" },
       clear: { type: "boolean" },
       "no-cache": { type: "boolean" },
+      dub: { type: "boolean" },
+      sub: { type: "boolean" }, // explicit default; --dub overrides
       help: { type: "boolean", short: "h" },
     },
   });
 
   if (values.help) return console.log(HELP);
+  dubMode = Boolean(values.dub) && !values.sub;
 
   // headless streaming: cine stream <query> — fzf a title, fzf a source, play
   const [cmd, ...args] = positionals;
