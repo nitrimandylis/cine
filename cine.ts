@@ -62,7 +62,6 @@ usage:
   cine --list          list cinema IDs and exit
   cine --clear         clear the cache for your cinema, then fetch fresh
   cine --no-cache      ignore the cache, always fetch fresh
-  cine --no-vpn-check  allow streaming without a VPN default route (risky)
 
 siren (ticket alerts via github.com/nitrimandylis/siren):
   cine watch                     list active watches
@@ -72,12 +71,11 @@ siren (ticket alerts via github.com/nitrimandylis/siren):
 keys (inside the TUI):
   ⇥ switch tab (Cinemas / Home)   ↑/↓/←/→ move   ⏎ details   q quit
   Cinemas: s sort · w watch · t trailer · b book · p prices · c cinema · r refresh
-  Home:    / search · p play (stream to IINA via rqbit) · v vpn status
+  Home:    / search · p play (stream to IINA via rqbit)
 
-Home streams via torrents (needs rqbit: brew install rqbit) and refuses to
-play unless a full-tunnel VPN is your default route — connect one with its
-kill switch on. showtimes: cyan = on sale, yellow = few seats, red ✗ = sold
-out — as reported by Village, whose flags often lag real availability.
+Home streams via torrents (needs rqbit: brew install rqbit). showtimes: cyan
+= on sale, yellow = few seats, red ✗ = sold out — as reported by Village,
+whose flags often lag real availability.
 piped output (cine | cat) prints a plain list instead of the TUI.`;
 
 // ---------------------------------------------------------------------------
@@ -844,49 +842,6 @@ async function sirenToggle(title: string, extra: Partial<SirenWatch> = {}): Prom
 }
 
 // ---------------------------------------------------------------------------
-// VPN safety — cine refuses to stream unless a full-tunnel VPN carries the
-// default route. Torrent peers see your IP; without a tunnel that's your real
-// ISP, which is the DMCA-letter path. This gate can't prove a kill switch is
-// on, so a mid-stream VPN drop still relies on the user's own kill switch.
-// ---------------------------------------------------------------------------
-
-/** Interface name on the default route, e.g. "en0" or "utun4". Pure parse of
- *  `route -n get default` output. */
-export function parseDefaultIface(routeOutput: string): string | null {
-  return routeOutput.match(/^\s*interface:\s*(\S+)/m)?.[1] ?? null;
-}
-
-/** A tunnel interface *as the default route* means a full-tunnel VPN. Presence
- *  of a utun alone does NOT — macOS keeps idle utun interfaces up for Private
- *  Relay / Continuity, so we only trust the one carrying the default route. */
-export function isTunnelIface(iface: string | null): boolean {
-  return iface != null && /^(utun|tun|wg|ipsec|tap)\d/.test(iface);
-}
-
-function defaultRouteIface(): string | null {
-  const r = Bun.spawnSync(["route", "-n", "get", "default"], { stdout: "pipe", stderr: "ignore" });
-  return r.exitCode === 0 ? parseDefaultIface(r.stdout.toString()) : null;
-}
-
-function vpnActive(): boolean {
-  return isTunnelIface(defaultRouteIface());
-}
-
-/** Interface + public-IP org, for the `v` status overlay. org is ground truth:
- *  your ISP's name = not protected; a hosting/VPN ASN = protected. */
-async function vpnStatus(): Promise<{ iface: string | null; tunnel: boolean; org: string }> {
-  const iface = defaultRouteIface();
-  let org = "unknown";
-  try {
-    const res = await fetch("https://ipinfo.io/json", { headers: { "User-Agent": UA } });
-    if (res.ok) org = ((await res.json()).org as string) || "unknown";
-  } catch {
-    // offline or blocked — leave org unknown
-  }
-  return { iface, tunnel: isTunnelIface(iface), org };
-}
-
-// ---------------------------------------------------------------------------
 // Torrent sources — magnets by title from the r/Piracy-trusted indexers:
 // Knaben (an aggregator over vetted trackers) for movies/TV, Nyaa for anime.
 // A magnet is a content hash, so unlike streaming-site scrapers there's
@@ -1185,10 +1140,9 @@ const state = {
   homeMovies: [] as Movie[],
   mode: "normal" as "normal" | "search",
   searchBuf: "",
-  overlay: null as null | "confirm" | "vpn",
+  overlay: null as null | "confirm",
   overlayLines: [] as string[],
   pending: null as Torrent | null,
-  noVpnCheck: false,
 };
 
 /** The movie list for the active tab (Home search results, or Village grid). */
@@ -1360,7 +1314,7 @@ function renderList() {
     buf += cellText(idx, movie, idx === state.sel);
   }
 
-  const homeHints = ` ⇥ tab · ↑↓←→ move · ⏎ details · / search · p play · v vpn · q quit`;
+  const homeHints = ` ⇥ tab · ↑↓←→ move · ⏎ details · / search · p play · q quit`;
   const cineHints = ` ⇥ tab · ↑↓←→ move · ⏎ details · s sort · w watch · t trailer · b book · p prices · c cinema · r refresh · q quit`;
   const bottom =
     state.mode === "search"
@@ -1375,7 +1329,7 @@ function renderList() {
   if (state.overlay) renderOverlay(cols, rows);
 }
 
-/** Centered box drawn over the grid (stream confirm / VPN status). */
+/** Centered box drawn over the grid (stream confirm). */
 function renderOverlay(cols: number, rows: number) {
   const lines = state.overlayLines;
   const innerW = Math.min(cols - 6, Math.max(24, ...lines.map(visLen)));
@@ -1462,9 +1416,7 @@ async function renderDetail() {
     lines.push("");
   }
   if (state.tab === "home") {
-    lines.push(
-      `${A.cyan}${A.bold}▶ p${A.reset}  ${A.grey}stream to IINA${vpnActive() ? "" : `  ${A.yellow}(VPN off — press v)${A.grey}`}${A.reset}`,
-    );
+    lines.push(`${A.cyan}${A.bold}▶ p${A.reset}  ${A.grey}stream to IINA${A.reset}`);
     lines.push("");
   } else {
     const today = isoDay(new Date());
@@ -1484,7 +1436,7 @@ async function renderDetail() {
     buf += `\x1b[${4 + i};${textCol}H${truncate(l, textW)}`;
   });
   const hints =
-    state.tab === "home" ? ` esc back · p play · v vpn · b imdb · q quit` : ` esc back · t trailer · b book · q quit`;
+    state.tab === "home" ? ` esc back · p play · b imdb · q quit` : ` esc back · t trailer · b book · q quit`;
   buf += `\x1b[${rows};1H${A.grey}${hints}${A.reset}`;
   out(buf);
 
@@ -1588,12 +1540,8 @@ function prefetchHomePosters() {
   }
 }
 
-/** VPN gate → resolve a magnet → confirm overlay. */
+/** Resolve a magnet → confirm overlay. */
 async function startStream(m: Movie) {
-  if (!state.noVpnCheck && !vpnActive()) {
-    state.flash = "no VPN — connect a full-tunnel VPN (kill switch on) first";
-    return render();
-  }
   state.flash = "finding a source…";
   render();
   const torrents = await resolveTorrents(m.title, m.year ?? 0);
@@ -1612,7 +1560,6 @@ async function startStream(m: Movie) {
     `${A.grey}seeders${A.reset}  ${t.seeders}`,
     `${A.grey}source${A.reset}   ${t.source}`,
     "",
-    `${A.yellow}torrenting — VPN required${A.reset}`,
     `${A.bold}y${A.reset} play    ${A.grey}any other key cancels${A.reset}`,
   ];
   render();
@@ -1629,33 +1576,12 @@ async function confirmStream() {
   render();
 }
 
-async function showVpn() {
-  state.flash = "checking VPN…";
-  render();
-  const s = await vpnStatus();
-  state.flash = "";
-  state.overlay = "vpn";
-  state.overlayLines = [
-    `${A.bold}VPN status${A.reset}`,
-    "",
-    `${A.grey}route${A.reset}  ${s.iface ?? "?"}  ${s.tunnel ? `${A.green}tunnel ✓${A.reset}` : `${A.red}physical — exposed${A.reset}`}`,
-    `${A.grey}exit${A.reset}   ${s.org}`,
-    "",
-    `${A.grey}any key to close${A.reset}`,
-  ];
-  render();
-}
-
 async function handleKey(key: string) {
   // overlays swallow the next keypress
   if (state.overlay === "confirm") {
     if (key === "y") return confirmStream();
     state.overlay = null;
     state.pending = null;
-    return render();
-  }
-  if (state.overlay === "vpn") {
-    state.overlay = null;
     return render();
   }
 
@@ -1704,7 +1630,6 @@ async function handleKey(key: string) {
     state.showPrices = false;
     return render();
   }
-  if (key === "v") return showVpn();
   if (key === "/" && state.tab === "home") {
     state.mode = "search";
     state.searchBuf = "";
@@ -1815,13 +1740,11 @@ async function main() {
       list: { type: "boolean" },
       clear: { type: "boolean" },
       "no-cache": { type: "boolean" },
-      "no-vpn-check": { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
   });
 
   if (values.help) return console.log(HELP);
-  state.noVpnCheck = Boolean(values["no-vpn-check"]);
 
   // siren subcommands: cine watch [title] [--imax] [-c id], cine unwatch <title>
   const [cmd, ...args] = positionals;

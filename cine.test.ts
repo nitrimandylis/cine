@@ -16,8 +16,6 @@ import {
   RT_ICONS,
   sortValue,
   SORTS,
-  parseDefaultIface,
-  isTunnelIface,
   parseKnaben,
   parseNyaaRss,
   humanSize,
@@ -81,19 +79,6 @@ test("humanSize scales bytes", () => {
   expect(humanSize(0)).toBe("?");
   expect(humanSize(1500)).toBe("1.5 KB");
   expect(humanSize(1992277407)).toBe("1.9 GB");
-});
-
-test("VPN gate trusts a tunnel only when it carries the default route", () => {
-  const via = (iface: string) =>
-    `   route to: default\ndestination: default\n       gateway: 10.0.0.1\n  interface: ${iface}\n      flags: <UP,GATEWAY>`;
-  expect(parseDefaultIface(via("en0"))).toBe("en0");
-  expect(parseDefaultIface(via("utun4"))).toBe("utun4");
-  expect(parseDefaultIface("nothing here")).toBeNull();
-  // a utun on the default route = VPN; a physical iface = exposed
-  expect(isTunnelIface("utun4")).toBe(true);
-  expect(isTunnelIface("wg0")).toBe(true);
-  expect(isTunnelIface("en0")).toBe(false);
-  expect(isTunnelIface(null)).toBe(false);
 });
 
 test("sortValue orders by each key, missing scores last", () => {

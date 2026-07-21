@@ -38,10 +38,8 @@ binary (`bun run compile` → `~/.bun/bin/cine`) with a man page.
 - **Streaming hub:** `⇥` switches Cinemas ⇄ Home. Home reuses the poster
   grid/detail to search any title (IMDB suggestion), then `p` streams it into
   IINA — magnets from Knaben (movies/TV) + Nyaa (anime), played via `rqbit`'s
-  HTTP stream endpoint. `v` shows VPN status. Refuses to stream unless a
-  full-tunnel VPN is the default route (`--no-vpn-check` overrides). Needs
-  `rqbit` (`brew install rqbit`) and a VPN with its kill switch on.
-- Flags: `-c`, `-d DD/MM`, `--list`, `--clear`, `--no-cache`, `--no-vpn-check`.
+  HTTP stream endpoint. Needs `rqbit` (`brew install rqbit`).
+- Flags: `-c`, `-d DD/MM`, `--list`, `--clear`, `--no-cache`.
 
 ## Where it's headed
 
@@ -51,21 +49,6 @@ binary (`bun run compile` → `~/.bun/bin/cine`) with a man page.
   (lobster archived, ani-cli on a key-rotation treadmill) — a magnet is a content
   hash, so near-zero maintenance. Next: a source picker (choose among
   quality/size/seeders instead of auto top-seeded).
-- **VPN safety — Level 0 (done):** cine refuses to stream unless a
-  full-tunnel VPN is the default route (checked via `route get default`; a bare
-  `utun` doesn't count — macOS keeps idle ones). `--no-vpn-check` overrides.
-  `v` shows interface + public-IP org. cine stays VPN-agnostic; the drop-leak
-  case relies on the user's own kill switch.
-- **VPN safety — Level 1 (planned):** cine brings the tunnel up itself so there's
-  no manual step — `wg-quick up` on launch / first stream, `down` on exit. Needs
-  a one-time `NOPASSWD` sudoers line for that one command (route changes need
-  root). The ideal end state: launch cine → VPN is up → hit `p` → IINA plays, no
-  hassle, no exposure.
-- **VPN safety — per-app routing (wishlist, OS-limited):** route *only* IINA's
-  traffic through the VPN and leave the rest of the Mac direct. macOS has no
-  clean per-app VPN routing (a Linux netns trick), and Proton's macOS
-  split-tunnelling is spotty — so this stays full-tunnel-while-streaming until
-  the OS story improves. Recorded as an ideal, not a simple TODO.
 - Other candidates if wanted: other chains (Odeon/Cinepolis),
   publishing the repo.
 - Ruled out: full seat maps — Village's addtickets step rejects requests
