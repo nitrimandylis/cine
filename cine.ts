@@ -979,6 +979,86 @@ async function resolveTorrents(title: string, year: number, anime: boolean): Pro
 }
 
 // ---------------------------------------------------------------------------
+// Playback — rqbit streams a magnet over HTTP while it downloads, and IINA
+// plays that URL (seekable via range requests). rqbit is a system tool cine
+// shells out to, like sips/open/gh — not bundled. The server is left running
+// after cine exits so playback survives (IINA streams *from* it).
+// ---------------------------------------------------------------------------
+
+const RQBIT_ADDR = "127.0.0.1:3030";
+const RQBIT_BASE = `http://${RQBIT_ADDR}`;
+const RQBIT_DIR = join(CACHE_DIR, "torrents");
+const VIDEO_EXT = /\.(mkv|mp4|avi|webm|mov|m4v|ts)$/i;
+
+/** Index of the largest video file in a torrent, or -1 if none. Pure. */
+export function pickVideoFile(files: { name?: string; components?: string[]; length?: number }[]): number {
+  let best = -1;
+  let bestLen = -1;
+  files.forEach((f, i) => {
+    const name = f.name ?? f.components?.join("/") ?? "";
+    const len = f.length ?? 0;
+    if (VIDEO_EXT.test(name) && len > bestLen) {
+      best = i;
+      bestLen = len;
+    }
+  });
+  return best;
+}
+
+function rqbitInstalled(): boolean {
+  return Bun.spawnSync(["which", "rqbit"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+}
+
+async function rqbitUp(): Promise<boolean> {
+  try {
+    return (await fetch(`${RQBIT_BASE}/`)).ok;
+  } catch {
+    return false;
+  }
+}
+
+/** Start the rqbit server if it isn't already answering; wait up to ~5s. */
+async function ensureRqbit(): Promise<boolean> {
+  if (await rqbitUp()) return true;
+  mkdirSync(RQBIT_DIR, { recursive: true });
+  Bun.spawn(["rqbit", "--http-api-listen-addr", RQBIT_ADDR, "server", "start", RQBIT_DIR], {
+    stdout: "ignore",
+    stderr: "ignore",
+    stdin: "ignore",
+  });
+  for (let i = 0; i < 25; i++) {
+    if (await rqbitUp()) return true;
+    await Bun.sleep(200);
+  }
+  return false;
+}
+
+/** Add a magnet, return the torrent id + chosen video file index. */
+async function rqbitAdd(magnet: string): Promise<{ id: number; fileIdx: number } | null> {
+  try {
+    const res = await fetch(`${RQBIT_BASE}/torrents?overwrite=true`, { method: "POST", body: magnet });
+    if (!res.ok) return null;
+    const j: any = await res.json();
+    const fileIdx = pickVideoFile(j.details?.files ?? []);
+    if (fileIdx < 0) return null;
+    return { id: j.id, fileIdx };
+  } catch {
+    return null;
+  }
+}
+
+/** Resolve → add → open in IINA. Returns a human status message. */
+async function streamMagnet(magnet: string): Promise<string> {
+  if (!rqbitInstalled()) return "rqbit not found — run: brew install rqbit";
+  if (!(await ensureRqbit())) return "couldn't start rqbit server";
+  const added = await rqbitAdd(magnet);
+  if (!added) return "no playable video file in that torrent";
+  const url = `${RQBIT_BASE}/torrents/${added.id}/stream/${added.fileIdx}`;
+  Bun.spawn(["open", "-a", "IINA", url], { stdout: "ignore", stderr: "ignore" });
+  return "streaming → IINA (give it a few seconds)";
+}
+
+// ---------------------------------------------------------------------------
 // TUI
 // ---------------------------------------------------------------------------
 

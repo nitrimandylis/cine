@@ -21,7 +21,19 @@ import {
   parseKnaben,
   parseNyaaRss,
   humanSize,
+  pickVideoFile,
 } from "./cine";
+
+test("pickVideoFile picks the largest video, ignoring samples and non-video", () => {
+  const files = [
+    { name: "readme.txt", length: 100 },
+    { name: "sample.mkv", length: 50_000_000 },
+    { components: ["Movie", "movie.mkv"], length: 8_000_000_000 },
+    { name: "cover.jpg", length: 200_000 },
+  ];
+  expect(pickVideoFile(files)).toBe(2); // the 8GB mkv (via components path)
+  expect(pickVideoFile([{ name: "notes.nfo", length: 10 }])).toBe(-1);
+});
 
 test("parseKnaben builds magnets and formats size", () => {
   const out = parseKnaben({
