@@ -1058,6 +1058,46 @@ function sxxeyy(season: number, ep: number): string {
   return `S${String(season).padStart(2, "0")}E${String(ep).padStart(2, "0")}`;
 }
 
+// ---------------------------------------------------------------------------
+// Anime numbering (AniList — keyless). IMDB numbers anime as SxxEyy, but Nyaa
+// releases use the romaji title + per-cour episode number, so anime gets its
+// episode list + search terms from AniList instead.
+// ---------------------------------------------------------------------------
+
+export function parseAnime(j: any): { romaji: string; episodes: number } | null {
+  const m = j?.data?.Media;
+  if (!m) return null;
+  const romaji = m.title?.romaji || m.title?.english || "";
+  const episodes = typeof m.episodes === "number" ? m.episodes : 0;
+  return romaji && episodes > 0 ? { romaji, episodes } : null;
+}
+
+async function fetchAnime(title: string): Promise<{ romaji: string; episodes: number } | null> {
+  try {
+    const r = await fetch("https://graphql.anilist.co", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "User-Agent": UA },
+      body: JSON.stringify({
+        query: `query($q:String){Media(search:$q,type:ANIME){episodes title{romaji english}}}`,
+        variables: { q: title },
+      }),
+    });
+    if (!r.ok) return null;
+    return parseAnime(await r.json());
+  } catch {
+    return null;
+  }
+}
+
+/** Strip season descriptors so the romaji matches Nyaa's fansub naming
+ *  ("Sousou no Frieren 2nd Season" → "Sousou no Frieren"). Pure. */
+export function nyaaTitle(romaji: string): string {
+  return romaji
+    .replace(/\b(\d+(?:st|nd|rd|th)\s+season|season\s+\d+|part\s+\d+|cour\s+\d+)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 async function homeSearch(query: string): Promise<Movie[]> {
   try {
     const q = query.toLowerCase().trim();
@@ -1301,6 +1341,8 @@ type SeriesState = {
   seasonIdx: number;
   episodes: Episode[];
   epSel: number;
+  anime?: boolean; // numbered via AniList (flat, romaji search) instead of IMDB SxxEyy
+  romaji?: string;
 };
 
 const state = {
@@ -1565,16 +1607,20 @@ function renderPrices(cols: number, rows: number) {
 /** Append the season header + a scroll-windowed episode list to a series
  *  detail view. The window follows epSel and fits the remaining rows. */
 function renderEpisodeBrowser(s: SeriesState, lines: string[], textW: number, rows: number) {
-  if (!s.seasons.length) {
-    lines.push(`${A.grey}loading episodes…${A.reset}`);
-    return;
+  if (s.anime) {
+    lines.push(`${A.bold}Episodes${A.reset}  ${A.grey}(${s.episodes.length}${s.romaji ? ` · ${s.romaji}` : ""})${A.reset}`);
+  } else {
+    if (!s.seasons.length) {
+      lines.push(`${A.grey}loading episodes…${A.reset}`);
+      return;
+    }
+    const season = s.seasons[s.seasonIdx];
+    const left = s.seasonIdx > 0 ? "◂" : " ";
+    const right = s.seasonIdx < s.seasons.length - 1 ? "▸" : " ";
+    lines.push(
+      `${A.bold}${left} Season ${season} ${right}${A.reset}  ${A.grey}(${s.seasonIdx + 1}/${s.seasons.length})${A.reset}`,
+    );
   }
-  const season = s.seasons[s.seasonIdx];
-  const left = s.seasonIdx > 0 ? "◂" : " ";
-  const right = s.seasonIdx < s.seasons.length - 1 ? "▸" : " ";
-  lines.push(
-    `${A.bold}${left} Season ${season} ${right}${A.reset}  ${A.grey}(${s.seasonIdx + 1}/${s.seasons.length})${A.reset}`,
-  );
   if (!s.episodes.length) {
     lines.push(`${A.grey}loading…${A.reset}`);
     return;
@@ -1587,7 +1633,7 @@ function renderEpisodeBrowser(s: SeriesState, lines: string[], textW: number, ro
     const sel = i === s.epSel;
     const mark = sel ? `${A.cyan}${A.bold}▸ ${A.reset}` : "  ";
     const rt = ep.rating != null ? ` ${A.grey}${ep.rating.toFixed(1)}★${A.reset}` : "";
-    const label = truncate(`E${ep.number} · ${ep.title}`, textW - 8);
+    const label = truncate(ep.title ? `E${ep.number} · ${ep.title}` : `Episode ${ep.number}`, textW - 8);
     lines.push(`${mark}${sel ? A.bold : ""}${label}${A.reset}${rt}`);
   }
 }
@@ -1666,7 +1712,9 @@ async function renderDetail() {
     state.tab === "cinemas"
       ? ` esc back · t trailer · b book · q quit`
       : series
-        ? ` esc back · ←→ season · ↑↓ episode · ⏎ play · q quit`
+        ? series.anime
+          ? ` esc back · ↑↓ episode · ⏎ play · q quit`
+          : ` esc back · ←→ season · ↑↓ episode · ⏎ play · q quit`
         : ` esc back · p play · b imdb · q quit`;
   buf += `\x1b[${rows};1H${A.grey}${hints}${A.reset}`;
   out(buf);
@@ -1825,11 +1873,17 @@ function startStream(m: Movie) {
   return startStreamFor(m.title, m.id, m.year ? `${m.title} ${m.year}` : m.title, m.title);
 }
 
-/** A TV episode: search "Show SxxEyy" on both indexers. */
+/** Stream one episode. Anime searches Nyaa by romaji + episode number and
+ *  Knaben by SxxEyy; regular TV uses SxxEyy on both. */
 function streamEpisode(s: SeriesState) {
   const ep = s.episodes[s.epSel];
   if (!ep) return;
   const tag = sxxeyy(s.seasons[s.seasonIdx], ep.number);
+  if (s.anime && s.romaji) {
+    const pad = String(ep.number).padStart(2, "0");
+    const base = nyaaTitle(s.romaji);
+    return startStreamFor(`${base} - ${pad}`, s.imdbId, `${s.title} ${tag}`, `${base} ${pad}`);
+  }
   const q = `${s.title} ${tag}`;
   return startStreamFor(`${s.title} ${tag}`, s.imdbId, q, q);
 }
@@ -1838,6 +1892,18 @@ async function loadSeries(m: Movie) {
   const s: SeriesState = { imdbId: m.id, title: m.title, seasons: [], seasonIdx: 0, episodes: [], epSel: 0 };
   state.series = s;
   if (state.view === "detail") renderDetail();
+  // anime is numbered by AniList (flat, romaji); a false match is harmless
+  // since the Knaben SxxEyy search still runs alongside the Nyaa romaji one
+  const a = await fetchAnime(m.title);
+  if (state.series !== s) return;
+  if (a) {
+    s.anime = true;
+    s.romaji = a.romaji;
+    s.seasons = [1];
+    s.episodes = Array.from({ length: a.episodes }, (_, i) => ({ season: 1, number: i + 1, title: "", rating: null }));
+    if (state.view === "detail") renderDetail();
+    return;
+  }
   s.seasons = await fetchSeasons(m.id);
   if (state.series !== s) return; // user moved on
   if (!s.seasons.length) s.seasons = [1];

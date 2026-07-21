@@ -39,10 +39,12 @@ binary (`bun run compile` → `~/.bun/bin/cine`) with a man page.
   grid/detail to search any title (IMDB suggestion), then `p` opens a source
   picker (seeders/size/source) and streams the chosen magnet into IINA —
   sources from Knaben (movies/TV) + Nyaa (anime), played via `rqbit`'s HTTP
-  stream endpoint. TV series: opening a series in Home shows a **season/episode
-  browser** (IMDB GraphQL — seasons via `←→`, episodes via `↑↓`, titles +
-  ratings); `⏎` on an episode searches `Show SxxEyy` and plays it. Also works:
-  searching a single episode directly, or picking a season pack / anime batch →
+  stream endpoint. Series: opening one in Home shows a **season/episode
+  browser**. TV uses IMDB GraphQL (seasons via `←→`, episodes via `↑↓`, titles +
+  ratings) and searches `Show SxxEyy`. **Anime** is detected via AniList and gets
+  a flat episode list numbered the way Nyaa releases are, searching by romaji +
+  episode (e.g. `Sousou no Frieren 05`) — a false anime match is harmless since
+  the SxxEyy search still runs too. A season pack / batch then flows into an
   **episode picker** over the torrent's files (natural-sorted E02→E10). Subtitles: an English `.srt` is fetched by IMDB id from
   yifysubtitles (keyless, cached in `~/.cache/cine/subs/`) for any movie, plus
   any `.srt` shipped in the torrent, plus embedded MKV tracks — all attached to

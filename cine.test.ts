@@ -25,7 +25,24 @@ import {
   parseYifyEnglish,
   parseSeasons,
   parseEpisodes,
+  parseAnime,
+  nyaaTitle,
 } from "./cine";
+
+test("parseAnime needs a romaji title and a known episode count", () => {
+  expect(parseAnime({ data: { Media: { title: { romaji: "Sousou no Frieren" }, episodes: 28 } } })).toEqual({
+    romaji: "Sousou no Frieren",
+    episodes: 28,
+  });
+  expect(parseAnime({ data: { Media: null } })).toBeNull(); // not anime
+  expect(parseAnime({ data: { Media: { title: { romaji: "X" }, episodes: null } } })).toBeNull(); // count unknown
+});
+
+test("nyaaTitle strips season descriptors to match fansub naming", () => {
+  expect(nyaaTitle("Sousou no Frieren 2nd Season")).toBe("Sousou no Frieren");
+  expect(nyaaTitle("Some Show Season 2")).toBe("Some Show");
+  expect(nyaaTitle("Sousou no Frieren")).toBe("Sousou no Frieren");
+});
 
 test("parseSeasons returns sorted season numbers", () => {
   const j = { data: { title: { episodes: { seasons: [{ number: 2 }, { number: 1 }, { number: 10 }] } } } };
