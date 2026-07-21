@@ -1,6 +1,6 @@
 .TH CINE 1 "2026-07-20" "cine 0.1.0" "User Commands"
 .SH NAME
-cine \- Village Cinemas (Greece) showtimes with IMDB ratings and posters
+cine \- Village Cinemas showtimes and a torrent streaming hub
 .SH SYNOPSIS
 .B cine
 [\fIoptions\fR]
@@ -18,6 +18,21 @@ Results are cached for 12 hours. The chosen cinema and sort order are
 remembered between runs. Showtimes are colored cyan (on sale), yellow (few
 seats left), or red with a cross (sold out). When output is piped, a plain
 text list is printed instead of the TUI.
+.PP
+Press
+.B Tab
+to switch to the second tab,
+.BR Stream ,
+a streaming hub for everything not playing near you. Search any title, pick a
+source (seeders, size, parsed quality), and it streams the chosen magnet into
+.BR IINA (1)
+through
+.BR rqbit (1)
+while it downloads \(em torrent-native, no streaming-site scrapers. TV and
+anime open a season/episode browser with watched markers and resume; English
+subtitles are attached automatically. The Village tab needs neither
+.BR rqbit (1)
+nor IINA.
 .SH OPTIONS
 .TP
 .BR \-c ", " \-\-cinema " " \fIid\fR
@@ -38,6 +53,22 @@ Ignore the cache and always fetch fresh data.
 .BR \-h ", " \-\-help
 Show help.
 .SH COMMANDS
+.TP
+.B stream \fItitle\fR
+Skip the TUI and stream from the command line: pick a title, then a source,
+each through
+.BR fzf (1),
+and play the result in
+.BR IINA (1)
+via
+.BR rqbit (1).
+A series steps through season then episode first (SxxEyy for TV, romaji plus
+number for anime); a season-pack source adds one more
+.BR fzf (1)
+step to choose the file. Needs
+.BR fzf (1),
+.BR rqbit (1),
+and IINA installed.
 .TP
 .B watch
 List active siren ticket watches.
@@ -80,13 +111,34 @@ Refresh, ignoring the cache.
 .TP
 .B q / esc
 Quit / go back.
+.TP
+.B tab
+Switch between the Village and Stream tabs.
+.PP
+In the
+.B Stream
+tab:
+.B /
+searches as you type, arrow keys move,
+.B enter
+opens details (or a season/episode browser for series),
+.B p
+plays the selection in IINA, and
+.B n
+plays the next episode.
 .SH FILES
 .TP
 .I ~/.config/cine/config.json
 Remembered default cinema.
 .TP
 .I ~/.cache/cine/
-Cached showtimes (12 h TTL) and posters.
+Cached showtimes (12 h TTL), posters, trending lists, and subtitles.
+.TP
+.I ~/.config/cine/history.json
+Stream tab history: recently played titles and episode resume state.
 .SH SEE ALSO
 .BR sips (1),
-.BR open (1)
+.BR open (1),
+.BR fzf (1),
+.BR rqbit (1),
+.BR iina (1)

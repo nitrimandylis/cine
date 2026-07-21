@@ -66,7 +66,22 @@ Press `⇥` for **Stream** and cine stops caring about Athens. Type a title, hit
 
 **Stream keys:** `⇥` tab · `/` search · `↑↓←→` move · `⏎` details · `p` play · `n` next episode · `q` quit
 
-> Streaming needs [`rqbit`](https://github.com/ikatson/rqbit) (`brew install rqbit`) and [IINA](https://iina.io). Village works without either.
+**Skip the TUI entirely.** `cine stream <title>` runs the same pipeline from the command line — [`fzf`](https://github.com/junegunn/fzf) picks the title, then the source, and it plays in IINA. Pick a **series** and it steps through season → episode first (`SxxEyy` for TV, romaji + number for anime, same as the tab); a season-pack source adds one more `fzf` to choose the file. The lobster flow, torrent-native.
+
+```console
+nick@cine:~$ cine stream dune
+  title>  Dune: Part Two (2024)  ·  movie
+  source>  1243▲   3.1 GiB  2160p HDR      knaben   Dune.Part.Two.2024.2160p...
+▸ buffering 8.2 MB · 4.1 MB/s → IINA
+
+nick@cine:~$ cine stream severance
+  title>   Severance (2022)  ·  TV
+  season>  Season 2
+  episode> S02E07  Chikhai Bardo · 9.1
+  source>  312▲   2.4 GiB  1080p WEB-DL    knaben   Severance.S02E07.1080p...
+```
+
+> Streaming needs [`rqbit`](https://github.com/ikatson/rqbit) (`brew install rqbit`) and [IINA](https://iina.io); the `stream` command also needs [`fzf`](https://github.com/junegunn/fzf) (`brew install fzf`). Village works without any of them.
 
 ## 📸 Evidence
 

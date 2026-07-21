@@ -65,6 +65,10 @@ usage:
   cine --clear         clear the cache for your cinema, then fetch fresh
   cine --no-cache      ignore the cache, always fetch fresh
 
+stream (skip the TUI — fzf a title, fzf a source, play in IINA):
+  cine stream <title>            e.g. cine stream dune
+                                 needs fzf, rqbit, and IINA installed
+
 siren (ticket alerts via github.com/nitrimandylis/siren):
   cine watch                     list active watches
   cine watch <title> [--imax]    get pinged when tickets open (-c limits cinema)
@@ -1490,6 +1494,152 @@ async function playFile(pack: Pack, fileIdx: number, imdbId: string): Promise<st
 }
 
 // ---------------------------------------------------------------------------
+// Headless streaming: `cine stream <query>` — pick a title, then a source, via
+// fzf, and hand it to IINA. Same pipeline as the Stream tab, no TUI. Like
+// lobster's flow, reusing homeSearch → resolveTorrents → rqbit → IINA.
+// ---------------------------------------------------------------------------
+
+/** Interactive pick with fzf: feeds "idx<TAB>label" lines, hides the idx
+ *  column, returns the chosen item — or null if the user pressed esc. fzf reads
+ *  candidates from our pipe and draws its UI on /dev/tty (inherited stderr). */
+async function fzfPick<T>(items: T[], label: (t: T) => string, promptLabel: string): Promise<T | null> {
+  const input = items.map((t, i) => `${i}\t${label(t)}`).join("\n");
+  const proc = Bun.spawn(
+    ["fzf", "--ansi", "--delimiter", "\t", "--with-nth", "2..", "--prompt", promptLabel, "--height", "40%", "--reverse"],
+    { stdin: new TextEncoder().encode(input), stdout: "pipe", stderr: "inherit" },
+  );
+  const picked = (await new Response(proc.stdout).text()).trim();
+  await proc.exited;
+  if (!picked) return null; // esc / no match
+  const idx = parseInt(picked.split("\t")[0], 10);
+  return items[idx] ?? null;
+}
+
+function have(bin: string): boolean {
+  return Bun.spawnSync(["which", bin], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+}
+
+async function streamCli(query: string) {
+  if (!have("rqbit")) return fail("rqbit not found — run: brew install rqbit");
+  if (!have("fzf")) return fail("fzf not found — run: brew install fzf");
+
+  // 1. resolve the query to a canonical title (IMDB suggestion) — gives a clean
+  //    name, year, and the imdb id used for external subtitles. Skipped when the
+  //    suggestion API finds nothing (e.g. an "Show S01E05" query): search raw.
+  process.stderr.write("searching…\r");
+  const results = await homeSearch(query);
+  process.stderr.write("\x1b[2K");
+  let movie: Movie | null = null;
+  if (results.length === 1) movie = results[0];
+  else if (results.length > 1) {
+    movie = await fzfPick(
+      results,
+      (m) => `${m.title}${m.year ? ` (${m.year})` : ""}  ·  ${isSeries(m) ? "TV" : "movie"}`,
+      "title> ",
+    );
+    if (!movie) return; // cancelled
+  }
+
+  // 2. a series → browse season/episode; a movie → title (+year). No IMDB match
+  //    (raw "Show S01E05" query) → search the raw query, embedded subs only.
+  let ep: { season: number; number: number } | null = null;
+  let knabenQ: string, nyaaQ: string;
+  if (movie && isSeries(movie)) {
+    const sel = await pickEpisode(movie);
+    if (!sel) return; // cancelled
+    ({ knabenQ, nyaaQ, ep } = sel);
+  } else if (movie) {
+    knabenQ = movie.year ? `${movie.title} ${movie.year}` : movie.title;
+    nyaaQ = movie.title;
+  } else {
+    knabenQ = nyaaQ = query;
+  }
+
+  // 3. find sources, pick one
+  process.stderr.write("\x1b[2Kfinding sources…\r");
+  const torrents = await resolveTorrents(knabenQ, nyaaQ);
+  process.stderr.write("\x1b[2K");
+  if (!torrents.length) return fail("no source found — try a different search");
+  const t = await fzfPick(
+    torrents.slice(0, 25),
+    (t) =>
+      `${String(t.seeders).padStart(5)}▲  ${t.size.padStart(9)}  ${qualityLabel(t.title).padEnd(15)}  ${t.source.padEnd(8)}  ${t.title}`,
+    "source> ",
+  );
+  if (!t) return; // cancelled
+
+  // 4. add to rqbit, pick the file if it's a pack, buffer the head, hand to IINA
+  streamReport = (m) => process.stderr.write("\x1b[2K" + m + "\r");
+  if (!(await ensureRqbit())) return fail("couldn't start rqbit server");
+  reportStream("resolving source…");
+  const pack = await rqbitAddFiles(t.magnet);
+  if (!pack) return fail("source has no seeds or no video — try another");
+  let fileIdx = pack.videos[0].idx;
+  if (pack.videos.length > 1) {
+    // a season pack even when we searched one episode: pick the file
+    const v = await fzfPick(pack.videos, (v) => `${humanSize(v.length).padStart(9)}  ${v.name}`, "episode> ");
+    if (!v) return;
+    fileIdx = v.idx;
+  }
+  await primeStream(pack.id, fileIdx);
+  const msg = await playFile(pack, fileIdx, movie?.id ?? "");
+  recordPlay(movie, ep);
+  process.stderr.write("\x1b[2K");
+  console.log(msg);
+}
+
+/** Season/episode selection for a series, returning the torrent search terms and
+ *  the episode (for resume history). Anime is numbered via AniList (flat, romaji
+ *  + episode) like the TUI; regular TV uses IMDB seasons/episodes and SxxEyy. */
+async function pickEpisode(
+  m: Movie,
+): Promise<{ knabenQ: string; nyaaQ: string; ep: { season: number; number: number } } | null> {
+  process.stderr.write("loading episodes…\r");
+  const anime = await fetchAnime(m.title);
+  process.stderr.write("\x1b[2K");
+
+  if (anime) {
+    const eps = Array.from({ length: anime.episodes }, (_, i) => ({ number: i + 1, title: anime.titles[i + 1] ?? "" }));
+    const ep = await fzfPick(eps, (e) => `${String(e.number).padStart(3)}  ${e.title}`, "episode> ");
+    if (!ep) return null;
+    const base = nyaaTitle(anime.romaji);
+    const pad = String(ep.number).padStart(2, "0");
+    return {
+      knabenQ: `${m.title} ${sxxeyy(1, ep.number)}`,
+      nyaaQ: `${base} ${pad}`,
+      ep: { season: 1, number: ep.number },
+    };
+  }
+
+  let seasons = await fetchSeasons(m.id);
+  if (!seasons.length) seasons = [1];
+  let season = seasons[0];
+  if (seasons.length > 1) {
+    const s = await fzfPick(seasons, (n) => `Season ${n}`, "season> ");
+    if (s == null) return null;
+    season = s;
+  }
+  process.stderr.write("loading episodes…\r");
+  const eps = await fetchEpisodes(m.id, season);
+  process.stderr.write("\x1b[2K");
+  if (!eps.length) return fail("couldn't load episodes — try: cine stream \"" + m.title + " " + sxxeyy(season, 1) + "\"");
+  const ep = await fzfPick(
+    eps,
+    (e) => `${sxxeyy(season, e.number)}  ${e.title}${e.rating ? ` · ${e.rating}` : ""}`,
+    "episode> ",
+  );
+  if (!ep) return null;
+  const q = `${m.title} ${sxxeyy(season, ep.number)}`;
+  return { knabenQ: q, nyaaQ: q, ep: { season, number: ep.number } };
+}
+
+function fail(msg: string): never {
+  process.stderr.write("\x1b[2K");
+  console.error(msg);
+  process.exit(1);
+}
+
+// ---------------------------------------------------------------------------
 // TUI
 // ---------------------------------------------------------------------------
 
@@ -2295,6 +2445,17 @@ async function withSpinner<T>(msg: string, fn: () => Promise<T>): Promise<T> {
 const PRIME_TARGET = 8 * 1024 * 1024; // buffer this much of the file head before IINA opens
 const PRIME_MAX_MS = 45_000; // …but don't wait longer than this (open IINA anyway)
 
+// Where streaming progress goes: the TUI header by default; the `stream`
+// subcommand (headless) swaps in a stderr line so it works with no TUI running.
+let streamReport: ((msg: string) => void) | null = null;
+function reportStream(msg: string) {
+  if (streamReport) streamReport(msg);
+  else {
+    state.flash = msg;
+    render();
+  }
+}
+
 /** Whether a torrent has finished downloading (whole file available). */
 async function rqbitFinished(id: number): Promise<boolean> {
   try {
@@ -2331,8 +2492,7 @@ async function primeStream(id: number, fileIdx: number) {
             lastRender = elapsed;
             const mb = (read / 1048576).toFixed(1);
             const speed = (read / 1048576 / Math.max(0.1, elapsed / 1000)).toFixed(1);
-            state.flash = `▸ buffering ${mb} MB · ${speed} MB/s`;
-            render();
+            reportStream(`▸ buffering ${mb} MB · ${speed} MB/s`);
           }
           if (elapsed > PRIME_MAX_MS) break;
         }
@@ -2643,8 +2803,15 @@ async function main() {
 
   if (values.help) return console.log(HELP);
 
-  // siren subcommands: cine watch [title] [--imax] [-c id], cine unwatch <title>
+  // headless streaming: cine stream <query> — fzf a title, fzf a source, play
   const [cmd, ...args] = positionals;
+  if (cmd === "stream" || cmd === "play") {
+    const query = args.join(" ").trim();
+    if (!query) return console.error("usage: cine stream <title>");
+    return streamCli(query);
+  }
+
+  // siren subcommands: cine watch [title] [--imax] [-c id], cine unwatch <title>
   if (cmd === "watch" || cmd === "unwatch") {
     const title = args.join(" ").trim();
     if (!title) {

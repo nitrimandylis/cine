@@ -63,6 +63,14 @@ binary (`bun run compile` → `~/.bun/bin/cine`) with a man page.
   then hands off. Series get **✓ watched markers**,
   **resume** (selection jumps to the next unwatched episode), **`n` play-next**,
   and AniList episode **titles** for anime.
+- **Headless stream** (`cine stream <title>`): the Stream pipeline without the
+  TUI, lobster-style. `fzf` picks the title (IMDB suggestion); a **series** then
+  steps through season → episode (IMDB seasons/episodes → `SxxEyy`, or AniList
+  romaji + episode number for anime), a movie skips straight to the source pick
+  (Knaben/Nyaa, highest-seeded first). A season-pack source adds one more `fzf`
+  over the torrent's files. Same `rqbit` head-buffer + IINA handoff and history
+  recording (episode saved for resume) as the tab. Needs `fzf` alongside
+  `rqbit`/IINA (each checked with a clear error).
 - Flags: `-c`, `-d DD/MM`, `--list`, `--clear`, `--no-cache`.
 
 ## Where it's headed
