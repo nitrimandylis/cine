@@ -2044,14 +2044,36 @@ function quit(): never {
   process.exit(0);
 }
 
+let repaintTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Coalesce grid repaints. A burst of poster loads would otherwise trigger one
+ *  full renderList each — and in kitty every render deletes and re-transmits
+ *  all images, so the grid visibly thrashes. One repaint per ~120ms instead. */
+function scheduleGridRepaint() {
+  if (repaintTimer) return;
+  repaintTimer = setTimeout(() => {
+    repaintTimer = null;
+    if (state.tab === "home" && state.view === "list") renderList();
+  }, 120);
+}
+
+/** True if the movie occupies a cell in the last rendered frame (on screen). */
+function posterVisible(id: string): boolean {
+  const list = listMovies();
+  for (const idx of state.frame.xy.keys()) if (list[idx]?.id === id) return true;
+  return false;
+}
+
 /** Fetch posters for a set of Home titles in the background, repainting the
- *  grid as each lands. */
+ *  grid only when a poster that's actually on screen lands. */
 function prefetchPosters(movies: Movie[]) {
   for (const m of movies) {
     if (state.posterPaths.has(m.id)) continue;
     ensurePoster(m).then((png) => {
       state.posterPaths.set(m.id, png);
-      if (state.tab === "home" && state.view === "list") renderList();
+      // off-screen posters (below the fold) don't need a repaint — scrolling to
+      // them runs a full render anyway, drawing from the now-cached path
+      if (png && state.tab === "home" && state.view === "list" && posterVisible(m.id)) scheduleGridRepaint();
     });
   }
 }
