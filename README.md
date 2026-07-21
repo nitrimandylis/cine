@@ -59,7 +59,7 @@ Press `⇥` for **Stream** and cine stops caring about Athens. Type a title, hit
 | 01 | **a landing, not a blank box** | opens on your recently-played titles above IMDB's trending movies and TV — one scrolling wall, labeled `── … ──` dividers |
 | 02 | **live search** | `/` and type; results stream in as you go (IMDB suggestion API, debounced) — no enter-to-search |
 | 03 | **source picker** | seeders, size, and a **quality** column parsed out of the release name (2160p · HDR · x265 · WEB-DL), highest-seeded first, across Knaben (movies/TV) + Nyaa (anime) |
-| 04 | **buffering feedback** | after you pick: peers, download speed, buffered % from rqbit — until IINA takes over |
+| 04 | **buffering feedback** | after you pick, cine buffers the file head (showing MB · speed) before handing the URL to IINA — so playback starts instead of hanging on an empty stream |
 | 05 | **tv & anime browser** | series open a season/episode browser (IMDB GraphQL); anime is detected via AniList and numbered the way Nyaa releases it — romaji + episode, not `SxxEyy` |
 | 06 | **watched & resume** | `✓` on episodes you've streamed, selection jumps to the next unwatched one, `n` plays the next episode without reopening the picker |
 | 07 | **subtitles, handled** | external English `.srt` by IMDB id (yifysubtitles), plus any subs shipped in the torrent, plus embedded MKV tracks — all attached to IINA, English first |
@@ -74,7 +74,7 @@ Press `⇥` for **Stream** and cine stops caring about Athens. Type a title, hit
 *the wall — ten movies, ten posters, one obvious winner*
 
 ![the detail view](assets/detail.png)
-*the odyssey's case file — certified fresh tomato and hot popcorn bucket, in text characters, as nature intended*
+*the odyssey's case file — certified fresh tomato and hot popcorn bucket, in text characters, as Nolan intended*
 
 ## 🚀 Run it
 

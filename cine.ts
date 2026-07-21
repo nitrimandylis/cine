@@ -2292,38 +2292,59 @@ async function withSpinner<T>(msg: string, fn: () => Promise<T>): Promise<T> {
   }
 }
 
-/** Live download stats for a torrent (peers · speed · buffered %). */
-async function rqbitStats(id: number): Promise<{ peers: number; speed: string; pct: number } | null> {
+const PRIME_TARGET = 8 * 1024 * 1024; // buffer this much of the file head before IINA opens
+const PRIME_MAX_MS = 45_000; // …but don't wait longer than this (open IINA anyway)
+
+/** Whether a torrent has finished downloading (whole file available). */
+async function rqbitFinished(id: number): Promise<boolean> {
   try {
-    const r = await fetch(`${RQBIT_BASE}/torrents/${id}/stats/v1`);
-    if (!r.ok) return null;
-    const j: any = await r.json();
-    const total = j.total_bytes || 0;
-    const prog = j.progress_bytes || 0;
-    return {
-      peers: j.live?.snapshot?.peer_stats?.live ?? 0,
-      speed: j.live?.download_speed?.human_readable ?? "0 MiB/s",
-      pct: total ? Math.min(100, Math.round((prog / total) * 100)) : 0,
-    };
+    const r = await fetch(`${RQBIT_BASE}/torrents/${id}/stats/v1`, { signal: AbortSignal.timeout(5_000) });
+    return r.ok ? Boolean((await r.json()).finished) : false;
   } catch {
-    return null;
+    return false;
   }
 }
 
-/** Show buffering progress in the header for a few seconds after IINA launches,
- *  then settle on `finalMsg`. Non-blocking to the input loop. */
-async function showBuffer(id: number, finalMsg: string) {
-  for (let i = 0; i < 6; i++) {
-    await Bun.sleep(500);
-    if (state.overlay || state.mode === "search") break; // user moved on
-    const s = await rqbitStats(id);
-    if (!s) break;
-    state.flash = `▸ ${s.peers} peers · ${s.speed} · buffered ${s.pct}%`;
-    render();
-    if (s.pct >= 5) break;
+/** Buffer the head of a file *before* handing it to IINA. rqbit only serves the
+ *  stream from byte 0 and (in 8.1.1) ignores Range, so if IINA opens at 0% it
+ *  gets an *immediate empty EOF* and hangs at "loading media…" forever. Reading
+ *  the stream ourselves forces rqbit into sequential (head-first) download; each
+ *  read streams the downloaded head then ends at the download frontier, so we
+ *  retry from byte 0 until one pass reaches the target (the head is buffered),
+ *  the torrent finishes, or we time out. Shows buffered MB · speed meanwhile. */
+async function primeStream(id: number, fileIdx: number) {
+  const url = `${RQBIT_BASE}/torrents/${id}/stream/${fileIdx}`;
+  const started = performance.now();
+  while (performance.now() - started < PRIME_MAX_MS) {
+    let read = 0;
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(PRIME_MAX_MS) });
+      if (res.body) {
+        const reader = res.body.getReader();
+        let lastRender = 0;
+        while (read < PRIME_TARGET) {
+          const { done, value } = await reader.read();
+          if (done) break; // hit the download frontier (or 0% empty stream)
+          read += value?.length ?? 0;
+          const elapsed = performance.now() - started;
+          if (elapsed - lastRender > 400) {
+            lastRender = elapsed;
+            const mb = (read / 1048576).toFixed(1);
+            const speed = (read / 1048576 / Math.max(0.1, elapsed / 1000)).toFixed(1);
+            state.flash = `▸ buffering ${mb} MB · ${speed} MB/s`;
+            render();
+          }
+          if (elapsed > PRIME_MAX_MS) break;
+        }
+        await reader.cancel();
+      }
+    } catch {
+      // network hiccup — fall through to the finished-check / retry
+    }
+    if (read >= PRIME_TARGET) return; // head buffered → safe to open IINA
+    if (await rqbitFinished(id)) return; // small file fully downloaded
+    await Bun.sleep(700); // let more pieces arrive, then re-read from byte 0
   }
-  state.flash = finalMsg;
-  render();
 }
 
 /** "▸ next: E06 · press n" when the just-played item is a series episode with
@@ -2353,10 +2374,11 @@ async function playPick(t: Torrent) {
     return render();
   }
   if (pack.videos.length === 1) {
+    await primeStream(pack.id, pack.videos[0].idx); // buffer the head so IINA doesn't open an empty stream
     const msg = await playFile(pack, pack.videos[0].idx, state.pickImdb);
     recordPlay(state.pickMovie, state.pickEp);
-    render();
-    return showBuffer(pack.id, msg + nextEpHint());
+    state.flash = msg + nextEpHint();
+    return render();
   }
   state.pack = pack;
   state.fileSel = 0;
@@ -2372,10 +2394,11 @@ async function playEpisode() {
   if (!pack || !v) return render();
   state.flash = "starting episode…";
   render();
+  await primeStream(pack.id, v.idx); // buffer the head so IINA doesn't open an empty stream
   const msg = await playFile(pack, v.idx, state.pickImdb);
   recordPlay(state.pickMovie, state.pickEp);
-  render();
-  return showBuffer(pack.id, msg);
+  state.flash = msg;
+  return render();
 }
 
 async function handleKey(key: string) {

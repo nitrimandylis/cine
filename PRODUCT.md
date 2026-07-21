@@ -56,8 +56,11 @@ binary (`bun run compile` → `~/.bun/bin/cine`) with a man page.
   labeled `── … ──` dividers. **Live search** (`/`) queries the suggestion API
   as you type (250ms debounce, stale-response guard) instead of ⏎-to-search.
   The **source picker** parses a **quality** column (2160p/HDR/x265/WEB-DL…)
-  out of release names; picking one shows **buffering feedback** (peers · speed
-  · buffered %) via rqbit's `stats/v1`. Series get **✓ watched markers**,
+  out of release names; picking one **buffers the file head** (showing MB ·
+  speed) before opening IINA — rqbit serves the stream only from byte 0 and (in
+  8.1.1) returns an immediate empty EOF at 0%, so opening IINA too early hangs it
+  at "loading media…"; cine reads the stream itself until the head is buffered,
+  then hands off. Series get **✓ watched markers**,
   **resume** (selection jumps to the next unwatched episode), **`n` play-next**,
   and AniList episode **titles** for anime.
 - Flags: `-c`, `-d DD/MM`, `--list`, `--clear`, `--no-cache`.
