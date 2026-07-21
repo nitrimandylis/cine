@@ -66,7 +66,7 @@ Press `⇥` for **Stream** and cine stops caring about Athens. Type a title, hit
 
 **Stream keys:** `⇥` tab · `/` search · `↑↓←→` move · `⏎` details · `p` play · `n` next episode · `q` quit
 
-**Skip the TUI entirely.** `cine stream <title>` runs the same pipeline from the command line — [`fzf`](https://github.com/junegunn/fzf) picks the title, then the source, and it plays in IINA. Pick a **series** and it steps through season → episode first (`SxxEyy` for TV, romaji + number for anime, same as the tab); a season-pack source adds one more `fzf` to choose the file. The lobster flow, torrent-native.
+**Skip the TUI entirely.** `cine stream <title>` runs the same pipeline from the command line — [`fzf`](https://github.com/junegunn/fzf) picks the title, then the source, and it plays in IINA. Pick a **series** and it steps through season → episode first (`SxxEyy` for TV, romaji + number for anime, same as the tab); a season-pack source adds one more `fzf` to choose the file. The [lobster](https://github.com/justchokingaround/lobster) flow, torrent-native.
 
 ```console
 nick@cine:~$ cine stream dune
@@ -151,6 +151,12 @@ flowchart LR
 
 Built on the shoulders of [johneliades/village_crawler](https://github.com/johneliades/village_crawler),
 which reverse-engineered the Village booking data first — cine is its TypeScript descendant.
+
+The Stream tab owes its shape to two terminal players: [lobster](https://github.com/justchokingaround/lobster)
+for the fzf search → source-picker → hand-off-to-a-player flow, and
+[ani-cli](https://github.com/pystardust/ani-cli) for how to think about anime — title
+variants, episode numbering, and the sub/dub split (cine stays torrent-native, so it
+borrows the ideas, not the streaming-site extraction).
 
 MIT licensed.
 
