@@ -1153,9 +1153,11 @@ const state = {
   homeMovies: [] as Movie[],
   mode: "normal" as "normal" | "search",
   searchBuf: "",
-  overlay: null as null | "confirm",
+  overlay: null as null | "picker",
   overlayLines: [] as string[],
-  pending: null as Torrent | null,
+  picks: [] as Torrent[],
+  pickSel: 0,
+  pickTitle: "",
 };
 
 /** The movie list for the active tab (Home search results, or Village grid). */
@@ -1342,7 +1344,7 @@ function renderList() {
   if (state.overlay) renderOverlay(cols, rows);
 }
 
-/** Centered box drawn over the grid (stream confirm). */
+/** Centered box drawn over the grid (source picker). */
 function renderOverlay(cols: number, rows: number) {
   const lines = state.overlayLines;
   const innerW = Math.min(cols - 6, Math.max(24, ...lines.map(visLen)));
@@ -1453,6 +1455,9 @@ async function renderDetail() {
   buf += `\x1b[${rows};1H${A.grey}${hints}${A.reset}`;
   out(buf);
 
+  // picker is modal — draw it over the detail and skip the poster underneath
+  if (state.overlay) return renderOverlay(cols, rows);
+
   const png = state.posterPaths.get(m.id) ?? (await ensurePoster(m));
   if (token !== state.detailToken || state.view !== "detail") return;
   if (png) {
@@ -1553,9 +1558,29 @@ function prefetchHomePosters() {
   }
 }
 
-/** Resolve a magnet → confirm overlay. */
+/** One picker row: marker · seeders · size · source · title. */
+function pickerRow(t: Torrent, selected: boolean): string {
+  const mark = selected ? `${A.cyan}${A.bold}▸ ${A.reset}` : "  ";
+  const seeds = `${A.green}${String(t.seeders).padStart(4)}s${A.reset}`;
+  const size = `${A.grey}${t.size.padStart(8)}${A.reset}`;
+  const src = `${A.grey}${truncate(t.source, 12).padEnd(12)}${A.reset}`;
+  const name = selected ? `${A.bold}${truncate(t.title, 38)}${A.reset}` : truncate(t.title, 38);
+  return `${mark}${seeds} ${size} ${src} ${name}`;
+}
+
+function buildPickerLines(): string[] {
+  return [
+    `${A.bold}${truncate(state.pickTitle, 46)}${A.reset}`,
+    "",
+    ...state.picks.map((t, i) => pickerRow(t, i === state.pickSel)),
+    "",
+    `${A.grey}↑↓ choose · ⏎ play · esc cancel${A.reset}`,
+  ];
+}
+
+/** Resolve sources → picker overlay (highest-seeded first, top 8). */
 async function startStream(m: Movie) {
-  state.flash = "finding a source…";
+  state.flash = "finding sources…";
   render();
   const torrents = await resolveTorrents(m.title, m.year ?? 0);
   state.flash = "";
@@ -1563,26 +1588,15 @@ async function startStream(m: Movie) {
     state.flash = "no torrent found for that title";
     return render();
   }
-  const t = torrents[0];
-  state.pending = t;
-  state.overlay = "confirm";
-  state.overlayLines = [
-    `${A.bold}${truncate(m.title, 40)}${A.reset}`,
-    "",
-    `${A.grey}size${A.reset}     ${t.size}`,
-    `${A.grey}seeders${A.reset}  ${t.seeders}`,
-    `${A.grey}source${A.reset}   ${t.source}`,
-    "",
-    `${A.bold}y${A.reset} play    ${A.grey}any other key cancels${A.reset}`,
-  ];
+  state.picks = torrents.slice(0, 8);
+  state.pickSel = 0;
+  state.pickTitle = m.title;
+  state.overlay = "picker";
+  state.overlayLines = buildPickerLines();
   render();
 }
 
-async function confirmStream() {
-  const t = state.pending;
-  state.overlay = null;
-  state.pending = null;
-  if (!t) return render();
+async function playPick(t: Torrent) {
   state.flash = "starting rqbit…";
   render();
   state.flash = await streamMagnet(t.magnet);
@@ -1590,11 +1604,19 @@ async function confirmStream() {
 }
 
 async function handleKey(key: string) {
-  // overlays swallow the next keypress
-  if (state.overlay === "confirm") {
-    if (key === "y") return confirmStream();
-    state.overlay = null;
-    state.pending = null;
+  // the source picker swallows keys while it's open
+  if (state.overlay === "picker") {
+    if (key === "\x1b[A" || key === "k") state.pickSel = Math.max(0, state.pickSel - 1);
+    else if (key === "\x1b[B" || key === "j") state.pickSel = Math.min(state.picks.length - 1, state.pickSel + 1);
+    else if (key === "\r" || key === "\n") {
+      const t = state.picks[state.pickSel];
+      state.overlay = null;
+      return t ? playPick(t) : render();
+    } else if (key === "\x1b" || key === "q") {
+      state.overlay = null;
+      return render();
+    } else return;
+    state.overlayLines = buildPickerLines();
     return render();
   }
 
