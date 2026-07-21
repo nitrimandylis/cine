@@ -119,6 +119,8 @@ export type Movie = {
   imdbPlot: string;
   imdbPoster: string;
   rt: RtScores | null;
+  year?: number; // Home tab (IMDB search) results carry a year; Village movies don't
+  enriched?: boolean; // Home detail rating/plot fetched lazily, once
 };
 
 const CACHE_VERSION = 3; // bump when Movie shape/enrichment changes so stale caches refetch
@@ -972,10 +974,103 @@ async function nyaaSearch(query: string): Promise<Torrent[]> {
   }
 }
 
-/** Anime → Nyaa (by title), everything else → Knaben (by title + year). */
-async function resolveTorrents(title: string, year: number, anime: boolean): Promise<Torrent[]> {
-  if (anime) return nyaaSearch(title);
-  return knabenSearch(year ? `${title} ${year}` : title);
+/** btih hash from a magnet, for de-duping across sources. */
+function magnetHash(magnet: string): string {
+  return magnet.match(/btih:([a-z0-9]+)/i)?.[1]?.toLowerCase() ?? magnet;
+}
+
+/** Query both indexers and merge by seeders — Knaben covers movies/TV, Nyaa
+ *  covers anime, so no content classifier is needed. Highest-seeded first. */
+async function resolveTorrents(title: string, year: number): Promise<Torrent[]> {
+  const [movies, anime] = await Promise.all([
+    knabenSearch(year ? `${title} ${year}` : title),
+    nyaaSearch(title),
+  ]);
+  const seen = new Set<string>();
+  return [...movies, ...anime]
+    .filter((t) => {
+      const h = magnetHash(t.magnet);
+      if (seen.has(h)) return false;
+      seen.add(h);
+      return true;
+    })
+    .sort((a, b) => b.seeders - a.seeders);
+}
+
+// ---------------------------------------------------------------------------
+// Home tab search — browse any title via IMDB's suggestion API (the same
+// keyless endpoint cine already uses), rendered in the existing poster grid.
+// ---------------------------------------------------------------------------
+
+const HOME_KINDS = new Set(["movie", "tvSeries", "tvMovie", "tvMiniSeries"]);
+
+/** Build grid-ready Movie objects from IMDB suggestion hits. Pure. */
+export function parseSuggestions(d: any[]): Movie[] {
+  return (d ?? [])
+    .filter((x) => typeof x?.id === "string" && x.id.startsWith("tt") && HOME_KINDS.has(x.qid))
+    .map((x) => ({
+      id: x.id,
+      title: x.l ?? "",
+      genre: "",
+      pg: "",
+      minutes: 0,
+      plot: typeof x.s === "string" ? x.s : "",
+      url: `https://www.imdb.com/title/${x.id}/`,
+      trailer: "",
+      poster: x.i?.imageUrl ?? "",
+      days: {},
+      rating: null,
+      votes: 0,
+      imdbUrl: `https://www.imdb.com/title/${x.id}/`,
+      imdbPlot: "",
+      imdbPoster: x.i?.imageUrl ?? "",
+      rt: null,
+      year: typeof x.y === "number" ? x.y : 0,
+    }));
+}
+
+async function homeSearch(query: string): Promise<Movie[]> {
+  try {
+    const q = query.toLowerCase().trim();
+    const first = q.replace(/[^a-z0-9]/g, "")[0] ?? "x";
+    const res = await fetch(`${IMDB_SUGGEST}/${first}/${encodeURIComponent(q)}.json`, {
+      headers: { "User-Agent": UA },
+    });
+    if (!res.ok) return [];
+    return parseSuggestions((await res.json()).d ?? []);
+  } catch {
+    return [];
+  }
+}
+
+/** Fetch rating/plot/runtime/genre for a Home title by its IMDB id, once. */
+async function enrichHome(m: Movie): Promise<void> {
+  if (m.enriched) return;
+  m.enriched = true;
+  try {
+    const gql = await fetch(IMDB_GRAPHQL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "User-Agent": UA },
+      body: JSON.stringify({
+        query: `query { title(id: "${m.id}") {
+          runtime { seconds }
+          ratingsSummary { aggregateRating voteCount }
+          plot { plotText { plainText } }
+          genres { genres { text } }
+        } }`,
+      }),
+    });
+    if (!gql.ok) return;
+    const t = (await gql.json()).data?.title;
+    if (!t) return;
+    m.rating = t.ratingsSummary?.aggregateRating ?? null;
+    m.votes = t.ratingsSummary?.voteCount ?? 0;
+    m.imdbPlot = t.plot?.plotText?.plainText ?? "";
+    if (t.runtime?.seconds) m.minutes = Math.round(t.runtime.seconds / 60);
+    m.genre = (t.genres?.genres ?? []).map((g: any) => g.text).join(", ").toLowerCase();
+  } catch {
+    // leave it showing "?" — same as Village movies with no IMDB match
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -22,7 +22,21 @@ import {
   parseNyaaRss,
   humanSize,
   pickVideoFile,
+  parseSuggestions,
 } from "./cine";
+
+test("parseSuggestions keeps watchable titles and drops people/games", () => {
+  const out = parseSuggestions([
+    { id: "tt1375666", l: "Inception", qid: "movie", y: 2010, i: { imageUrl: "https://img/incep.jpg" } },
+    { id: "tt0903747", l: "Breaking Bad", qid: "tvSeries", y: 2008 },
+    { id: "nm0000138", l: "Leonardo DiCaprio", qid: "name" },
+    { id: "tt9999999", l: "Some Game", qid: "videoGame", y: 2021 },
+  ]);
+  expect(out.map((m) => m.id)).toEqual(["tt1375666", "tt0903747"]);
+  expect(out[0].year).toBe(2010);
+  expect(out[0].poster).toBe("https://img/incep.jpg");
+  expect(out[0].rating).toBeNull(); // enriched lazily
+});
 
 test("pickVideoFile picks the largest video, ignoring samples and non-video", () => {
   const files = [
