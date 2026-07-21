@@ -27,15 +27,61 @@ import {
   parseEpisodes,
   parseAnime,
   nyaaTitle,
+  parseQuality,
+  qualityLabel,
+  parseTrending,
 } from "./cine";
 
 test("parseAnime needs a romaji title and a known episode count", () => {
   expect(parseAnime({ data: { Media: { title: { romaji: "Sousou no Frieren" }, episodes: 28 } } })).toEqual({
     romaji: "Sousou no Frieren",
     episodes: 28,
+    titles: {},
   });
   expect(parseAnime({ data: { Media: null } })).toBeNull(); // not anime
   expect(parseAnime({ data: { Media: { title: { romaji: "X" }, episodes: null } } })).toBeNull(); // count unknown
+});
+
+test("parseAnime maps AniList streaming titles by episode number", () => {
+  const j = {
+    data: {
+      Media: {
+        title: { romaji: "Frieren" },
+        episodes: 3,
+        streamingEpisodes: [
+          { title: "Episode 1 - The Journey's End" },
+          { title: "Episode 2 - It Didn't Have to Be Magic" },
+          { title: "trailer PV" }, // unparseable → skipped
+        ],
+      },
+    },
+  };
+  expect(parseAnime(j)?.titles).toEqual({ 1: "The Journey's End", 2: "It Didn't Have to Be Magic" });
+});
+
+test("parseQuality pulls resolution/HDR/codec/source out of release names", () => {
+  expect(parseQuality("Dune.Part.Two.2024.2160p.WEB-DL.DV.HDR.x265-GROUP")).toEqual({
+    res: "2160p", hdr: "DV", codec: "x265", src: "WEB-DL",
+  });
+  expect(qualityLabel("Movie.1080p.BluRay.x264")).toBe("1080p x264 BluRay");
+  expect(qualityLabel("Some.Show.HEVC.4K.HDR10")).toBe("2160p HDR x265");
+  expect(qualityLabel("just a plain name")).toBe("—"); // nothing parseable
+});
+
+test("parseTrending maps IMDB advancedTitleSearch edges to grid movies", () => {
+  const j = {
+    data: {
+      advancedTitleSearch: {
+        edges: [
+          { node: { title: { id: "tt123", titleText: { text: "The Odyssey" }, releaseYear: { year: 2026 }, titleType: { id: "movie" }, ratingsSummary: { aggregateRating: 8.4 }, primaryImage: { url: "http://img/o.jpg" } } } },
+          { node: { title: { id: "bad" } } }, // no tt id → dropped
+        ],
+      },
+    },
+  };
+  const out = parseTrending(j);
+  expect(out).toHaveLength(1);
+  expect(out[0]).toMatchObject({ id: "tt123", title: "The Odyssey", year: 2026, rating: 8.4, poster: "http://img/o.jpg", kind: "movie" });
 });
 
 test("nyaaTitle strips season descriptors to match fansub naming", () => {

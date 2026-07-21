@@ -51,6 +51,8 @@ const PRICE_TABLE = [
 const CACHE_DIR = join(homedir(), ".cache", "cine");
 const POSTER_DIR = join(CACHE_DIR, "posters");
 const CONFIG_PATH = join(homedir(), ".config", "cine", "config.json");
+const HISTORY_PATH = join(homedir(), ".config", "cine", "history.json");
+const TREND_PATH = join(CACHE_DIR, "trending.json");
 const CACHE_TTL_HOURS = 12;
 
 const HELP = `cine — Village Cinemas (Greece) showtimes with IMDB ratings and posters
@@ -71,8 +73,9 @@ siren (ticket alerts via github.com/nitrimandylis/siren):
 keys (inside the TUI):
   ⇥ switch tab (Cinemas / Home)   ↑/↓/←/→ move   ⏎ details   q quit
   Cinemas: s sort · w watch · t trailer · b book · p prices · c cinema · r refresh
-  Home:    / search · ⏎ details · p play (stream to IINA via rqbit)
-           TV/anime: ⏎ a series → browse seasons (←→) & episodes (↑↓), ⏎ plays one
+  Home:    opens on recently-played + trending · / live search · p play (→ IINA)
+           TV/anime: ⏎ a series → seasons (←→) & episodes (↑↓); ⏎ play · n next
+           watched episodes show ✓ and resume jumps to the next unwatched one
 
 Home streams via torrents (needs rqbit: brew install rqbit). showtimes: cyan
 = on sale, yellow = few seats, red ✗ = sold out — as reported by Village,
@@ -465,6 +468,126 @@ function loadConfig(): Config {
 function saveConfig(cfg: Config) {
   mkdirSync(join(homedir(), ".config", "cine"), { recursive: true });
   writeFileSync(CONFIG_PATH, JSON.stringify(cfg));
+}
+
+// ---------------------------------------------------------------------------
+// Home landing data — a local play history (recently played + per-series
+// resume point) and a 12h cache of IMDB's most-popular charts (trending).
+// ---------------------------------------------------------------------------
+
+const HISTORY_CAP = 30;
+
+type HistoryEntry = {
+  id: string;
+  title: string;
+  poster: string;
+  kind: string;
+  year?: number;
+  lastSeason?: number;
+  lastEpisode?: number;
+  ts: number;
+};
+
+function loadHistory(): HistoryEntry[] {
+  try {
+    const h = JSON.parse(readFileSync(HISTORY_PATH, "utf-8"));
+    return Array.isArray(h) ? h : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveHistory(list: HistoryEntry[]) {
+  mkdirSync(join(homedir(), ".config", "cine"), { recursive: true });
+  writeFileSync(HISTORY_PATH, JSON.stringify(list.slice(0, HISTORY_CAP)));
+}
+
+/** Record a stream launch: move the title to the front, update its resume
+ *  point (season/episode) if it's a series. Deduped by IMDB id. */
+function recordPlay(m: Movie | null, ep: { season: number; number: number } | null) {
+  if (!m) return;
+  const list = loadHistory().filter((e) => e.id !== m.id);
+  list.unshift({
+    id: m.id,
+    title: m.title,
+    poster: m.poster || m.imdbPoster || "",
+    kind: m.kind ?? "",
+    year: m.year,
+    lastSeason: ep?.season,
+    lastEpisode: ep?.number,
+    ts: Date.now(),
+  });
+  saveHistory(list);
+}
+
+/** The last episode watched for a series id, or null. */
+function lastWatched(id: string): { season: number; number: number } | null {
+  const e = loadHistory().find((h) => h.id === id);
+  return e && e.lastEpisode != null ? { season: e.lastSeason ?? 1, number: e.lastEpisode } : null;
+}
+
+/** A history entry as a grid-ready Movie (poster/title/rating placeholders). */
+function historyToMovie(e: HistoryEntry): Movie {
+  return {
+    id: e.id, title: e.title, genre: "", pg: "", minutes: 0, plot: "",
+    url: `https://www.imdb.com/title/${e.id}/`, trailer: "",
+    poster: e.poster, days: {}, rating: null, votes: 0,
+    imdbUrl: `https://www.imdb.com/title/${e.id}/`, imdbPlot: "", imdbPoster: e.poster,
+    rt: null, year: e.year, kind: e.kind,
+  };
+}
+
+/** Grid-ready Movies from an IMDB advancedTitleSearch (trending) response. Pure. */
+export function parseTrending(j: any): Movie[] {
+  const edges = j?.data?.advancedTitleSearch?.edges ?? [];
+  return edges
+    .map((e: any) => e.node?.title)
+    .filter((t: any) => typeof t?.id === "string" && t.id.startsWith("tt"))
+    .map((t: any) => {
+      const url = t.primaryImage?.url ?? "";
+      return {
+        id: t.id, title: t.titleText?.text ?? "", genre: "", pg: "", minutes: 0, plot: "",
+        url: `https://www.imdb.com/title/${t.id}/`, trailer: "",
+        poster: url, days: {}, rating: t.ratingsSummary?.aggregateRating ?? null, votes: 0,
+        imdbUrl: `https://www.imdb.com/title/${t.id}/`, imdbPlot: "", imdbPoster: url,
+        rt: null, year: t.releaseYear?.year ?? undefined,
+        kind: t.titleType?.id ?? "",
+      } as Movie;
+    });
+}
+
+/** Most-popular movies or TV from IMDB's GraphQL (keyless), sorted by daily
+ *  popularity — the closest thing to a "trending now" list. */
+async function fetchTrending(titleType: "movie" | "tvSeries"): Promise<Movie[]> {
+  try {
+    const query = `query { advancedTitleSearch(first: 24, sort: {sortBy: POPULARITY, sortOrder: ASC}, constraints: {titleTypeConstraint: {anyTitleTypeIds: ["${titleType}"]}}) { edges { node { title { id titleText { text } releaseYear { year } titleType { id } ratingsSummary { aggregateRating } primaryImage { url } } } } } }`;
+    const r = await fetch(IMDB_GRAPHQL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "User-Agent": UA },
+      body: JSON.stringify({ query }),
+    });
+    if (!r.ok) return [];
+    return parseTrending(await r.json());
+  } catch {
+    return [];
+  }
+}
+
+type TrendCache = { cachedAt: string; movies: Movie[]; tv: Movie[] };
+
+function loadTrending(): TrendCache | null {
+  try {
+    const c: TrendCache = JSON.parse(readFileSync(TREND_PATH, "utf-8"));
+    const ageHours = (Date.now() - new Date(c.cachedAt).getTime()) / 3_600_000;
+    return ageHours < CACHE_TTL_HOURS ? c : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveTrending(movies: Movie[], tv: Movie[]) {
+  mkdirSync(CACHE_DIR, { recursive: true });
+  writeFileSync(TREND_PATH, JSON.stringify({ cachedAt: new Date().toISOString(), movies, tv }));
 }
 
 // ---------------------------------------------------------------------------
@@ -877,6 +1000,35 @@ export function humanSize(bytes: number): string {
   return `${n.toFixed(n < 10 && i > 0 ? 1 : 0)} ${u[i]}`;
 }
 
+/** Pull the resolution / HDR / codec / release-source tags out of a raw
+ *  torrent name so the picker can show them as tidy columns. Pure. */
+export function parseQuality(title: string): { res: string; hdr: string; codec: string; src: string } {
+  const res =
+    title.match(/\b(2160p|1080p|720p|480p)\b/i)?.[1].toLowerCase() ??
+    (/\b(4k|uhd)\b/i.test(title) ? "2160p" : "");
+  const hdr = /\b(dolby\s*vision|dv)\b/i.test(title)
+    ? "DV"
+    : /\bhdr10\+?\b|\bhdr\b/i.test(title)
+      ? "HDR"
+      : "";
+  const codec = /\b(x265|h\.?\s?265|hevc)\b/i.test(title)
+    ? "x265"
+    : /\b(x264|h\.?\s?264|avc)\b/i.test(title)
+      ? "x264"
+      : /\bav1\b/i.test(title)
+        ? "AV1"
+        : "";
+  const srcRaw = title.match(/\b(REMUX|BluRay|BDRip|BRRip|WEB[- .]?DL|WEBRip|WEB|HDTV|DVDRip|HDCAM|CAM)\b/i)?.[1] ?? "";
+  const src = /^web[- .]?dl$/i.test(srcRaw) ? "WEB-DL" : /^web$/i.test(srcRaw) ? "WEB" : srcRaw;
+  return { res, hdr, codec, src };
+}
+
+/** The quality tags of a torrent as one short string ("2160p HDR x265"). */
+export function qualityLabel(title: string): string {
+  const q = parseQuality(title);
+  return [q.res, q.hdr, q.codec, q.src].filter(Boolean).join(" ") || "—";
+}
+
 /** Parse Knaben's JSON response into torrents. Pure. */
 export function parseKnaben(data: any): Torrent[] {
   const hits: any[] = data?.hits ?? [];
@@ -1064,21 +1216,29 @@ function sxxeyy(season: number, ep: number): string {
 // episode list + search terms from AniList instead.
 // ---------------------------------------------------------------------------
 
-export function parseAnime(j: any): { romaji: string; episodes: number } | null {
+type AnimeInfo = { romaji: string; episodes: number; titles: Record<number, string> };
+
+export function parseAnime(j: any): AnimeInfo | null {
   const m = j?.data?.Media;
   if (!m) return null;
   const romaji = m.title?.romaji || m.title?.english || "";
   const episodes = typeof m.episodes === "number" ? m.episodes : 0;
-  return romaji && episodes > 0 ? { romaji, episodes } : null;
+  // AniList streaming titles look like "Episode 5 - The Fight" — map by number
+  const titles: Record<number, string> = {};
+  for (const se of m.streamingEpisodes ?? []) {
+    const mm = String(se?.title ?? "").match(/Episode\s+(\d+)\s*[-–—:]\s*(.+)/i);
+    if (mm) titles[Number(mm[1])] = mm[2].trim();
+  }
+  return romaji && episodes > 0 ? { romaji, episodes, titles } : null;
 }
 
-async function fetchAnime(title: string): Promise<{ romaji: string; episodes: number } | null> {
+async function fetchAnime(title: string): Promise<AnimeInfo | null> {
   try {
     const r = await fetch("https://graphql.anilist.co", {
       method: "POST",
       headers: { "Content-Type": "application/json", "User-Agent": UA },
       body: JSON.stringify({
-        query: `query($q:String){Media(search:$q,type:ANIME){episodes title{romaji english}}}`,
+        query: `query($q:String){Media(search:$q,type:ANIME){episodes title{romaji english} streamingEpisodes{title}}}`,
         variables: { q: title },
       }),
     });
@@ -1364,7 +1524,14 @@ const state = {
   grid: { scroll: 0, perRow: 1, viewRows: 1, pCols: 16, cellW: 19, cellH: 14 },
   // "out or in" hub: Cinemas (Village) vs Home (stream anything into IINA)
   tab: "cinemas" as "cinemas" | "home",
-  homeMovies: [] as Movie[],
+  homeMovies: [] as Movie[], // current search results (empty on the landing)
+  homeQuery: "", // committed search text; "" means show the landing (recents + trending)
+  recents: [] as Movie[], // landing: recently played (from history.json)
+  trendMovies: [] as Movie[], // landing: IMDB most-popular movies
+  trendTv: [] as Movie[], // landing: IMDB most-popular TV
+  searchSeq: 0, // guards live-search: a newer keystroke invalidates older responses
+  searchTimer: null as ReturnType<typeof setTimeout> | null,
+  frame: { xy: new Map<number, { y: number; x: number }>(), pCols: 16 }, // last grid frame's cell positions
   mode: "normal" as "normal" | "search",
   searchBuf: "",
   overlay: null as null | "picker" | "files",
@@ -1373,14 +1540,31 @@ const state = {
   pickSel: 0,
   pickTitle: "",
   pickImdb: "",
+  pickMovie: null as Movie | null, // the title being streamed (for history)
+  pickEp: null as { season: number; number: number } | null, // its episode, if a series
   pack: null as Pack | null,
   fileSel: 0,
   series: null as SeriesState | null,
 };
 
-/** The movie list for the active tab (Home search results, or Village grid). */
+type Group = { label: string; movies: Movie[] };
+
+/** Ordered groups for the active view. Home landing = recents + trending
+ *  (labeled, empty groups dropped); a Home search or Cinemas = one unlabeled
+ *  group so the grid renders as a single flat block. */
+function listGroups(): Group[] {
+  if (state.tab !== "home") return [{ label: "", movies: gridMovies() }];
+  if (state.homeQuery) return [{ label: "", movies: state.homeMovies }];
+  return [
+    { label: "Recently played", movies: state.recents },
+    { label: "Trending movies", movies: state.trendMovies },
+    { label: "Trending TV", movies: state.trendTv },
+  ].filter((g) => g.movies.length);
+}
+
+/** Flat movie list (selection/navigation order) across all groups. */
 function listMovies(): Movie[] {
-  return state.tab === "home" ? state.homeMovies : gridMovies();
+  return listGroups().flatMap((g) => g.movies);
 }
 
 function out(s: string) {
@@ -1461,27 +1645,27 @@ function header(cols: number): string {
   const ctx =
     state.tab === "cinemas"
       ? state.cinemaName
-      : state.homeMovies.length
-        ? "search results"
-        : "press / to search";
+      : state.homeQuery
+        ? `results · ${state.homeQuery}`
+        : "home";
   const left = ` ${A.bold}${A.cyan}CINE${A.reset} ${tabBar()}  ${A.bold}${ctx}${A.reset}`;
   const right = state.flash
     ? `${A.yellow}${state.flash}${A.reset}`
     : state.tab === "cinemas"
       ? `${A.grey}${gridMovies().length} movies · sorted by ${SORT_LABELS[state.sort]}${A.reset}`
-      : `${A.grey}${state.homeMovies.length} results · ⇥ switch tab${A.reset}`;
+      : state.homeQuery
+        ? `${A.grey}${state.homeMovies.length} results · ⇥ switch tab${A.reset}`
+        : `${A.grey}stream anything · ⇥ switch tab${A.reset}`;
   const pad = Math.max(1, cols - visLen(left) - visLen(right) - 2);
   return left + " ".repeat(pad) + right + "\n" + A.grey + "─".repeat(cols) + A.reset + "\n";
 }
 
 const GRID_POSTER_ROWS = 11;
 
-/** Screen position of a grid cell, or null if it's outside the visible window. */
+/** Screen position of a grid cell in the last rendered frame, or null if it
+ *  wasn't visible. The flow layout (renderList) fills state.frame.xy. */
 function cellPos(idx: number): { y: number; x: number } | null {
-  const g = state.grid;
-  const rel = idx - g.scroll * g.perRow;
-  if (rel < 0 || rel >= g.viewRows * g.perRow) return null;
-  return { y: 3 + Math.floor(rel / g.perRow) * g.cellH, x: 2 + (rel % g.perRow) * g.cellW };
+  return state.frame.xy.get(idx) ?? null;
 }
 
 /** Positioned title + rating lines for one grid cell (text only, no poster). */
@@ -1493,11 +1677,19 @@ function cellText(idx: number, movie: Movie, selected: boolean): string {
   const titlePad = titleRaw + " ".repeat(Math.max(0, pCols - visLen(titleRaw)));
   const title = selected ? `${A.inv}${A.bold}${titlePad}${A.reset}` : `${A.bold}${titlePad}${A.reset}`;
   const marker = selected ? `${A.cyan}${A.bold}▸ ${A.reset}` : "  ";
+  // runtime for Village movies; release year for Home titles (which carry no runtime)
+  const meta = movie.minutes ? `${movie.minutes}′` : movie.year ? String(movie.year) : "";
   return (
     `\x1b[${pos.y + GRID_POSTER_ROWS};${pos.x}H${title}` +
-    `\x1b[${pos.y + GRID_POSTER_ROWS + 1};${pos.x}H${marker}${ratingStr(movie)}${rtGridStr(movie)} ${A.grey}${movie.minutes}′${A.reset}`
+    `\x1b[${pos.y + GRID_POSTER_ROWS + 1};${pos.x}H${marker}${ratingStr(movie)}${rtGridStr(movie)}${meta ? ` ${A.grey}${meta}${A.reset}` : ""}`
   );
 }
+
+// A flow-layout block: either a group header line or a row of grid cells
+// (holding global movie indices). Headers let the landing group recents and
+// trending under labeled dividers within one scrolling grid.
+type Block = { header: string } | { row: number[] };
+const HEADER_H = 2; // blank + label line
 
 function renderList() {
   clearScreen();
@@ -1505,10 +1697,14 @@ function renderList() {
   const rows = process.stdout.rows || 24;
   let buf = header(cols);
 
-  const list = listMovies();
+  const groups = listGroups();
+  const list = groups.flatMap((g) => g.movies);
   if (state.sel >= list.length) state.sel = Math.max(0, list.length - 1);
   if (!list.length) {
-    const msg = state.tab === "home" ? "Press / to search, then ⏎ to play." : "No upcoming screenings.";
+    const msg =
+      state.tab === "home"
+        ? state.homeQuery ? "No results." : "Press / to search, then ⏎ to play."
+        : "No upcoming screenings.";
     buf += "\n" + center(`${A.dim}${msg}${A.reset}`, cols);
   }
 
@@ -1517,24 +1713,60 @@ function renderList() {
   const cellH = GRID_POSTER_ROWS + 3; // poster + title + meta + gap
   const perRow = Math.max(1, Math.floor((cols - 2) / cellW));
   state.perRow = perRow;
-  const viewRows = Math.max(1, Math.floor((rows - 4) / cellH));
-  const totalRows = Math.ceil(list.length / perRow);
-  const selRow = Math.floor(state.sel / perRow);
-  // keep the current window unless the selection left it
-  let scroll = Math.min(Math.max(state.grid.scroll, selRow - viewRows + 1), selRow);
-  scroll = Math.max(0, Math.min(scroll, Math.max(0, totalRows - viewRows)));
-  state.grid = { scroll, perRow, viewRows, pCols, cellW, cellH };
+
+  // Build blocks: each labeled group gets a header, then rows of `perRow` cells.
+  const blocks: Block[] = [];
+  let gi = 0; // running global movie index
+  for (const g of groups) {
+    if (g.label) blocks.push({ header: g.label });
+    for (let i = 0; i < g.movies.length; i += perRow) {
+      const idxs: number[] = [];
+      for (let j = 0; j < perRow && i + j < g.movies.length; j++) idxs.push(gi + i + j);
+      blocks.push({ row: idxs });
+    }
+    gi += g.movies.length;
+  }
+  const blockH = (b: Block) => ("header" in b ? HEADER_H : cellH);
+  const selBlock = blocks.findIndex((b) => "row" in b && b.row.includes(state.sel));
+
+  const gridTop = 3;
+  const bottomY = rows - 1; // keep the last row for hints
+  // Pick the top visible block so the selected cell stays on screen.
+  let top = Math.max(0, Math.min(state.grid.scroll, blocks.length - 1));
+  if (selBlock >= 0) {
+    if (selBlock < top) top = selBlock;
+    const fits = (from: number) => {
+      let y = gridTop;
+      for (let bi = from; bi <= selBlock; bi++) y += blockH(blocks[bi]);
+      return y <= bottomY;
+    };
+    while (top < selBlock && !fits(top)) top++;
+    // reveal a group's header when its first row is at the top of the window
+    if (top > 0 && top === selBlock && "header" in blocks[top - 1]) top--;
+  }
+  state.grid = { scroll: top, perRow, viewRows: 0, pCols, cellW, cellH };
 
   const useKitty = kittySupported();
   const posters: { png: string; y: number; x: number }[] = [];
+  const xy = new Map<number, { y: number; x: number }>();
 
-  for (let i = 0; i < viewRows * perRow; i++) {
-    const idx = scroll * perRow + i;
+  let y = gridTop;
+  for (let bi = top; bi < blocks.length; bi++) {
+    const b = blocks[bi];
+    const h = blockH(b);
+    if (y + h > bottomY + 1) break; // no room for this block
+    if ("header" in b) {
+      buf += `\x1b[${y + 1};2H${A.grey}── ${b.header} ──${A.reset}`;
+    } else {
+      for (let c = 0; c < b.row.length; c++) xy.set(b.row[c], { y, x: 2 + c * cellW });
+    }
+    y += h;
+  }
+  state.frame = { xy, pCols };
+
+  for (const [idx, pos] of xy) {
     const movie = list[idx];
-    if (!movie) break;
-    const pos = cellPos(idx)!;
     const png = state.posterPaths.get(movie.id) ?? null;
-
     if (png && useKitty) {
       posters.push({ png: gridThumbPath(png), y: pos.y, x: pos.x });
     } else if (png) {
@@ -1551,7 +1783,7 @@ function renderList() {
   const cineHints = ` ⇥ tab · ↑↓←→ move · ⏎ details · s sort · w watch · t trailer · b book · p prices · c cinema · r refresh · q quit`;
   const bottom =
     state.mode === "search"
-      ? `${A.cyan} /${state.searchBuf}${A.reset}${A.grey}▏  ⏎ search · esc cancel${A.reset}`
+      ? `${A.cyan} /${state.searchBuf}${A.reset}${A.grey}▏  ⏎ select · esc cancel${A.reset}`
       : `${A.grey}${truncate(state.tab === "home" ? homeHints : cineHints, cols - 1)}${A.reset}`;
   buf += `\x1b[${rows};1H${bottom}`;
   out(buf);
@@ -1584,10 +1816,9 @@ function moveSelection(newSel: number) {
   const list = listMovies();
   const clamped = Math.max(0, Math.min(list.length - 1, newSel));
   if (clamped === state.sel) return;
-  const g = state.grid;
-  const selRow = Math.floor(clamped / g.perRow);
-  const stays = selRow >= g.scroll && selRow < g.scroll + g.viewRows;
   const old = state.sel;
+  // repaint text-only when both cells are in the current frame; else scroll
+  const stays = state.frame.xy.has(old) && state.frame.xy.has(clamped);
   state.sel = clamped;
   if (stays) {
     out(cellText(old, list[old], false) + cellText(clamped, list[clamped], true));
@@ -1625,13 +1856,15 @@ function renderEpisodeBrowser(s: SeriesState, lines: string[], textW: number, ro
     lines.push(`${A.grey}loading…${A.reset}`);
     return;
   }
+  const w = lastWatched(s.imdbId); // resume point → ✓ on already-watched episodes
   const avail = Math.max(3, rows - 5 - lines.length);
   const total = s.episodes.length;
   const start = total <= avail ? 0 : Math.min(Math.max(0, s.epSel - Math.floor(avail / 2)), total - avail);
   for (let i = start; i < Math.min(total, start + avail); i++) {
     const ep = s.episodes[i];
     const sel = i === s.epSel;
-    const mark = sel ? `${A.cyan}${A.bold}▸ ${A.reset}` : "  ";
+    const watched = !!w && (ep.season < w.season || (ep.season === w.season && ep.number <= w.number));
+    const mark = sel ? `${A.cyan}${A.bold}▸ ${A.reset}` : watched ? `${A.green}✓ ${A.reset}` : "  ";
     const rt = ep.rating != null ? ` ${A.grey}${ep.rating.toFixed(1)}★${A.reset}` : "";
     const label = truncate(ep.title ? `E${ep.number} · ${ep.title}` : `Episode ${ep.number}`, textW - 8);
     lines.push(`${mark}${sel ? A.bold : ""}${label}${A.reset}${rt}`);
@@ -1713,8 +1946,8 @@ async function renderDetail() {
       ? ` esc back · t trailer · b book · q quit`
       : series
         ? series.anime
-          ? ` esc back · ↑↓ episode · ⏎ play · q quit`
-          : ` esc back · ←→ season · ↑↓ episode · ⏎ play · q quit`
+          ? ` esc back · ↑↓ episode · ⏎ play · n next · q quit`
+          : ` esc back · ←→ season · ↑↓ episode · ⏎ play · n next · q quit`
         : ` esc back · p play · b imdb · q quit`;
   buf += `\x1b[${rows};1H${A.grey}${hints}${A.reset}`;
   out(buf);
@@ -1811,9 +2044,10 @@ function quit(): never {
   process.exit(0);
 }
 
-/** Fetch posters for Home results in the background, repainting as they land. */
-function prefetchHomePosters() {
-  for (const m of state.homeMovies) {
+/** Fetch posters for a set of Home titles in the background, repainting the
+ *  grid as each lands. */
+function prefetchPosters(movies: Movie[]) {
+  for (const m of movies) {
     if (state.posterPaths.has(m.id)) continue;
     ensurePoster(m).then((png) => {
       state.posterPaths.set(m.id, png);
@@ -1822,14 +2056,66 @@ function prefetchHomePosters() {
   }
 }
 
-/** One picker row: marker · seeders (▲) · size · source · title. */
+function prefetchHomePosters() {
+  prefetchPosters(state.homeMovies);
+}
+
+let homeLoaded = false;
+
+/** Populate the Home landing: recents (always refreshed from history) and
+ *  trending movies/TV (fetched once, 12h-cached). Non-blocking. */
+async function ensureHomeLoaded() {
+  state.recents = loadHistory().map(historyToMovie);
+  prefetchPosters(state.recents);
+  if (homeLoaded) return;
+  homeLoaded = true;
+  const cached = loadTrending();
+  if (cached) {
+    state.trendMovies = cached.movies;
+    state.trendTv = cached.tv;
+  } else {
+    const [mv, tv] = await Promise.all([fetchTrending("movie"), fetchTrending("tvSeries")]);
+    state.trendMovies = mv;
+    state.trendTv = tv;
+    if (mv.length || tv.length) saveTrending(mv, tv);
+  }
+  prefetchPosters([...state.trendMovies, ...state.trendTv]);
+  if (state.tab === "home" && state.view === "list" && !state.homeQuery) renderList();
+}
+
+/** Live search: debounce keystrokes, drop stale responses via a sequence
+ *  counter, and fall back to the landing when the query is cleared. */
+function scheduleSearch() {
+  if (state.searchTimer) clearTimeout(state.searchTimer);
+  const q = state.searchBuf.trim();
+  if (!q) {
+    state.homeQuery = "";
+    state.homeMovies = [];
+    state.sel = 0;
+    state.searchSeq++; // cancel any in-flight response
+    return renderList();
+  }
+  state.homeQuery = q; // show the (possibly stale) results group while typing
+  state.searchTimer = setTimeout(async () => {
+    const seq = ++state.searchSeq;
+    const res = await homeSearch(q);
+    if (seq !== state.searchSeq) return; // a newer keystroke superseded this
+    state.homeMovies = res;
+    state.sel = 0;
+    prefetchHomePosters();
+    if (state.tab === "home" && state.view === "list") renderList();
+  }, 250);
+}
+
+/** One picker row: marker · seeders (▲) · size · quality · source · title. */
 function pickerRow(t: Torrent, selected: boolean): string {
   const mark = selected ? `${A.cyan}${A.bold}▸ ${A.reset}` : "  ";
   const seeds = `${A.green}${String(t.seeders).padStart(5)}▲${A.reset}`;
   const size = `${A.grey}${t.size.padStart(9)}${A.reset}`;
-  const src = `${A.grey}${truncate(t.source, 12).padEnd(12)}${A.reset}`;
-  const name = selected ? `${A.bold}${truncate(t.title, 36)}${A.reset}` : truncate(t.title, 36);
-  return `${mark}${seeds} ${size}  ${src} ${name}`;
+  const qual = `${A.cyan}${truncate(qualityLabel(t.title), 15).padEnd(15)}${A.reset}`;
+  const src = `${A.grey}${truncate(t.source, 8).padEnd(8)}${A.reset}`;
+  const name = selected ? `${A.bold}${truncate(t.title, 30)}${A.reset}` : `${A.dim}${truncate(t.title, 30)}${A.reset}`;
+  return `${mark}${seeds} ${size}  ${qual} ${src} ${name}`;
 }
 
 /** Picker lines with a header and a scroll window that fits the terminal, so
@@ -1843,7 +2129,7 @@ function buildPickerLines(): string[] {
   const counter = total > capacity ? `  ·  ${start + 1}–${start + shown.length}/${total}` : "";
   return [
     `${A.bold}${truncate(state.pickTitle, 46)}${A.reset}`,
-    `${A.grey}   seeders      size  source       title${A.reset}`,
+    `${A.grey}   seeders      size  quality         source   title${A.reset}`,
     ...shown.map((t, li) => pickerRow(t, start + li === state.pickSel)),
     `${A.grey}↑↓ choose · ⏎ play · esc cancel${counter}${A.reset}`,
   ];
@@ -1870,6 +2156,8 @@ async function startStreamFor(label: string, imdbId: string, knabenQuery: string
 
 /** A movie: search title (+year). */
 function startStream(m: Movie) {
+  state.pickMovie = m;
+  state.pickEp = null;
   return startStreamFor(m.title, m.id, m.year ? `${m.title} ${m.year}` : m.title, m.title);
 }
 
@@ -1878,6 +2166,8 @@ function startStream(m: Movie) {
 function streamEpisode(s: SeriesState) {
   const ep = s.episodes[s.epSel];
   if (!ep) return;
+  state.pickMovie = listMovies()[state.sel] ?? historyToMovie({ id: s.imdbId, title: s.title, poster: "", kind: "tvSeries", ts: 0 });
+  state.pickEp = { season: s.seasons[s.seasonIdx], number: ep.number };
   const tag = sxxeyy(s.seasons[s.seasonIdx], ep.number);
   if (s.anime && s.romaji) {
     const pad = String(ep.number).padStart(2, "0");
@@ -1900,7 +2190,10 @@ async function loadSeries(m: Movie) {
     s.anime = true;
     s.romaji = a.romaji;
     s.seasons = [1];
-    s.episodes = Array.from({ length: a.episodes }, (_, i) => ({ season: 1, number: i + 1, title: "", rating: null }));
+    s.episodes = Array.from({ length: a.episodes }, (_, i) => ({
+      season: 1, number: i + 1, title: a.titles[i + 1] ?? "", rating: null,
+    }));
+    applyResume(s);
     if (state.view === "detail") renderDetail();
     return;
   }
@@ -1917,7 +2210,20 @@ async function loadSeasonEpisodes(s: SeriesState) {
   const eps = await fetchEpisodes(s.imdbId, s.seasons[s.seasonIdx]);
   if (state.series !== s) return;
   s.episodes = eps;
+  applyResume(s);
   if (state.view === "detail") renderDetail();
+}
+
+/** Jump the selection to the first unwatched episode of the current season,
+ *  based on the resume point recorded in history (else stay at the top). */
+function applyResume(s: SeriesState) {
+  const w = lastWatched(s.imdbId);
+  if (!w || s.seasons[s.seasonIdx] !== w.season) {
+    s.epSel = 0;
+    return;
+  }
+  const next = s.episodes.findIndex((e) => e.number > w.number);
+  s.epSel = next >= 0 ? next : Math.max(0, s.episodes.length - 1);
 }
 
 /** One episode-picker row: marker · size · filename. */
@@ -1944,27 +2250,88 @@ function buildFileLines(): string[] {
   ];
 }
 
+/** Run an async task while animating a spinner in the header. rqbit's add
+ *  blocks for seconds while it resolves metadata from peers, so this gives the
+ *  wait a heartbeat instead of a frozen "starting stream…". */
+async function withSpinner<T>(msg: string, fn: () => Promise<T>): Promise<T> {
+  const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  let i = 0;
+  const timer = setInterval(() => {
+    state.flash = `${frames[i++ % frames.length]} ${msg}`;
+    render();
+  }, 120);
+  try {
+    return await fn();
+  } finally {
+    clearInterval(timer);
+  }
+}
+
+/** Live download stats for a torrent (peers · speed · buffered %). */
+async function rqbitStats(id: number): Promise<{ peers: number; speed: string; pct: number } | null> {
+  try {
+    const r = await fetch(`${RQBIT_BASE}/torrents/${id}/stats/v1`);
+    if (!r.ok) return null;
+    const j: any = await r.json();
+    const total = j.total_bytes || 0;
+    const prog = j.progress_bytes || 0;
+    return {
+      peers: j.live?.snapshot?.peer_stats?.live ?? 0,
+      speed: j.live?.download_speed?.human_readable ?? "0 MiB/s",
+      pct: total ? Math.min(100, Math.round((prog / total) * 100)) : 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Show buffering progress in the header for a few seconds after IINA launches,
+ *  then settle on `finalMsg`. Non-blocking to the input loop. */
+async function showBuffer(id: number, finalMsg: string) {
+  for (let i = 0; i < 6; i++) {
+    await Bun.sleep(500);
+    if (state.overlay || state.mode === "search") break; // user moved on
+    const s = await rqbitStats(id);
+    if (!s) break;
+    state.flash = `▸ ${s.peers} peers · ${s.speed} · buffered ${s.pct}%`;
+    render();
+    if (s.pct >= 5) break;
+  }
+  state.flash = finalMsg;
+  render();
+}
+
+/** "▸ next: E06 · press n" when the just-played item is a series episode with
+ *  a next one queued; empty otherwise. */
+function nextEpHint(): string {
+  const s = state.series;
+  if (!s || !state.pickEp || s.epSel >= s.episodes.length - 1) return "";
+  return `   ▸ next: E${s.episodes[s.epSel + 1].number} · press n`;
+}
+
 /** Chosen source → add torrent → play directly (movie/single episode) or open
  *  the episode picker (season pack / anime batch). */
 async function playPick(t: Torrent) {
-  state.flash = "starting stream…";
-  render();
   if (!rqbitInstalled()) {
     state.flash = "rqbit not found — run: brew install rqbit";
     return render();
   }
+  state.flash = "starting stream…";
+  render();
   if (!(await ensureRqbit())) {
     state.flash = "couldn't start rqbit server";
     return render();
   }
-  const pack = await rqbitAddFiles(t.magnet);
+  const pack = await withSpinner("resolving source…", () => rqbitAddFiles(t.magnet));
   if (!pack) {
     state.flash = "source has no seeds or no video — try another";
     return render();
   }
   if (pack.videos.length === 1) {
-    state.flash = await playFile(pack, pack.videos[0].idx, state.pickImdb);
-    return render();
+    const msg = await playFile(pack, pack.videos[0].idx, state.pickImdb);
+    recordPlay(state.pickMovie, state.pickEp);
+    render();
+    return showBuffer(pack.id, msg + nextEpHint());
   }
   state.pack = pack;
   state.fileSel = 0;
@@ -1980,8 +2347,10 @@ async function playEpisode() {
   if (!pack || !v) return render();
   state.flash = "starting episode…";
   render();
-  state.flash = await playFile(pack, v.idx, state.pickImdb);
+  const msg = await playFile(pack, v.idx, state.pickImdb);
+  recordPlay(state.pickMovie, state.pickEp);
   render();
+  return showBuffer(pack.id, msg);
 }
 
 async function handleKey(key: string) {
@@ -2019,29 +2388,30 @@ async function handleKey(key: string) {
   // it doesn't quit, so this must come before the quit check below
   if (state.mode === "search") {
     if (key === "\r" || key === "\n") {
+      // results are already live — ⏎ just leaves the input so arrows navigate
       state.mode = "normal";
-      const q = state.searchBuf.trim();
-      if (q) {
-        state.flash = "searching…";
-        render();
-        state.homeMovies = await homeSearch(q);
-        state.sel = 0;
-        prefetchHomePosters();
-        state.flash = state.homeMovies.length ? "" : "no results";
-      }
       return render();
     }
     if (key === "\x1b") {
       state.mode = "normal";
-      return render();
+      state.searchBuf = "";
+      scheduleSearch(); // empty query → back to the landing
+      return;
     }
     if (key === "\x7f" || key === "\b") {
       state.searchBuf = state.searchBuf.slice(0, -1);
-      return render();
+      renderList();
+      return scheduleSearch();
     }
-    if (key.length === 1 && key >= " ") {
-      state.searchBuf += key;
-      return render();
+    // accept typed text; a paste/fast typing can arrive as a multi-char chunk,
+    // so take every printable character rather than only single keys
+    if (!key.startsWith("\x1b")) {
+      const typed = [...key].filter((c) => c >= " " && c !== "\x7f").join("");
+      if (typed) {
+        state.searchBuf += typed;
+        renderList();
+        return scheduleSearch();
+      }
     }
     return;
   }
@@ -2057,7 +2427,9 @@ async function handleKey(key: string) {
     state.tab = state.tab === "cinemas" ? "home" : "cinemas";
     state.view = "list";
     state.sel = 0;
+    state.grid.scroll = 0;
     state.showPrices = false;
+    if (state.tab === "home") ensureHomeLoaded(); // non-blocking: recents now, trending as it lands
     return render();
   }
   if (key === "/" && state.tab === "home") {
@@ -2151,6 +2523,12 @@ async function handleKey(key: string) {
       return;
     }
     if (key === "\r") return streamEpisode(s);
+    // n → advance to the next episode and stream it (binge without re-picking)
+    if (key === "n" && s.epSel < s.episodes.length - 1) {
+      s.epSel++;
+      renderDetail();
+      return streamEpisode(s);
+    }
   }
   const last = Math.max(0, list.length - 1);
   const inList = state.view === "list";

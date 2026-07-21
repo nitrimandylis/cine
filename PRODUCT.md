@@ -49,6 +49,17 @@ binary (`bun run compile` → `~/.bun/bin/cine`) with a man page.
   yifysubtitles (keyless, cached in `~/.cache/cine/subs/`) for any movie, plus
   any `.srt` shipped in the torrent, plus embedded MKV tracks — all attached to
   IINA (external English first). Needs `rqbit` (`brew install rqbit`).
+- **Home landing + UX** (`2026-07-21`): Home opens on a grouped grid —
+  **Recently played** (local `history.json`, deduped, cap 30) above **Trending
+  movies** / **Trending TV** (IMDB `advancedTitleSearch` by popularity, 12h
+  cache in `~/.cache/cine/trending.json`), drawn as one scrolling grid with
+  labeled `── … ──` dividers. **Live search** (`/`) queries the suggestion API
+  as you type (250ms debounce, stale-response guard) instead of ⏎-to-search.
+  The **source picker** parses a **quality** column (2160p/HDR/x265/WEB-DL…)
+  out of release names; picking one shows **buffering feedback** (peers · speed
+  · buffered %) via rqbit's `stats/v1`. Series get **✓ watched markers**,
+  **resume** (selection jumps to the next unwatched episode), **`n` play-next**,
+  and AniList episode **titles** for anime.
 - Flags: `-c`, `-d DD/MM`, `--list`, `--clear`, `--no-cache`.
 
 ## Where it's headed
@@ -57,8 +68,8 @@ binary (`bun run compile` → `~/.bun/bin/cine`) with a man page.
   `docs/superpowers/specs/2026-07-21-streaming-hub-design.md`). Torrent-native
   rather than streaming-site scrapers, which are a dead/daily-breaking arms race
   (lobster archived, ani-cli on a key-rotation treadmill) — a magnet is a content
-  hash, so near-zero maintenance. Next: a source picker (choose among
-  quality/size/seeders instead of auto top-seeded).
+  hash, so near-zero maintenance. Source picker with a parsed quality column —
+  shipped (see Home landing + UX above).
 - Other candidates if wanted: other chains (Odeon/Cinepolis),
   publishing the repo.
 - Ruled out: full seat maps — Village's addtickets step rejects requests
