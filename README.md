@@ -26,7 +26,7 @@
 
 Arrow around the grid, hit enter, and you get the full case file: the poster up close, both Tomatometer and Popcornmeter with text-character recreations of RT's actual icons (the certified-fresh tomato, the spilled popcorn bucket — all of them), plot, and every showtime for the next three weeks. It remembers your cinema, caches for 12 hours, and falls back to a plain list when piped — because sometimes you just want `cine | grep IMAX`.
 
-And then there's the other tab. Hit `⇥` and cine flips from Cinemas to **Home** — a streaming hub for everything that *isn't* playing near you. Search any title, pick a source, and it plays in IINA. No streaming-site scrapers (those rot weekly, on a key-rotation treadmill); cine resolves a magnet, streams it through `rqbit` while it's still downloading, and hands the URL to your player. A magnet is a content hash, so there's nothing to keep patching.
+And then there's the other tab. Hit `⇥` and cine flips from **Village** to **Stream** — a streaming hub for everything that *isn't* playing near you. Search any title, pick a source, and it plays in IINA. No streaming-site scrapers (those rot weekly, on a key-rotation treadmill); cine resolves a magnet, streams it through `rqbit` while it's still downloading, and hands the URL to your player. A magnet is a content hash, so there's nothing to keep patching.
 
 It started as a TypeScript port of [village_crawler](https://github.com/johneliades/village_crawler) and ended up with opinions.
 
@@ -48,11 +48,11 @@ nick@cine:~$ cine
 | 06 | **smart cache** | what it actually avoids — refetching for 12 hours, invalidating itself when the schema changes or every cached showtime is in the past |
 | 07 | **availability colors** | what it actually mirrors — village's own soldout/limited flags (cyan, yellow, red ✗) — which lag reality, because the live seat map hides behind a captcha we don't fight |
 
-**Cinemas keys:** `↑↓←→` move · `⏎` details · `s` sort · `w` watch · `t` trailer · `b` book · `p` prices · `c` cinema · `r` refresh · `⇥` tab · `q` quit
+**Village keys:** `↑↓←→` move · `⏎` details · `s` sort · `w` watch · `t` trailer · `b` book · `p` prices · `c` cinema · `r` refresh · `⇥` tab · `q` quit
 
 ## 📺 The other tab
 
-Press `⇥` for **Home** and cine stops caring about Athens. Type a title, hit play, watch it in IINA — sourced from torrent indexers, streamed through [`rqbit`](https://github.com/ikatson/rqbit) as it downloads.
+Press `⇥` for **Stream** and cine stops caring about Athens. Type a title, hit play, watch it in IINA — sourced from torrent indexers, streamed through [`rqbit`](https://github.com/ikatson/rqbit) as it downloads.
 
 | | feature | what it actually does |
 |---|---|---|
@@ -64,9 +64,9 @@ Press `⇥` for **Home** and cine stops caring about Athens. Type a title, hit p
 | 06 | **watched & resume** | `✓` on episodes you've streamed, selection jumps to the next unwatched one, `n` plays the next episode without reopening the picker |
 | 07 | **subtitles, handled** | external English `.srt` by IMDB id (yifysubtitles), plus any subs shipped in the torrent, plus embedded MKV tracks — all attached to IINA, English first |
 
-**Home keys:** `⇥` tab · `/` search · `↑↓←→` move · `⏎` details · `p` play · `n` next episode · `q` quit
+**Stream keys:** `⇥` tab · `/` search · `↑↓←→` move · `⏎` details · `p` play · `n` next episode · `q` quit
 
-> Streaming needs [`rqbit`](https://github.com/ikatson/rqbit) (`brew install rqbit`) and [IINA](https://iina.io). Cinemas works without either.
+> Streaming needs [`rqbit`](https://github.com/ikatson/rqbit) (`brew install rqbit`) and [IINA](https://iina.io). Village works without either.
 
 ## 📸 Evidence
 
@@ -88,7 +88,7 @@ cine
 man cine          # the full reference, offline
 ```
 
-First run asks which cinema you go to. It never asks again. For the Home tab, `brew install rqbit` and grab [IINA](https://iina.io) — the Cinemas tab needs neither.
+First run asks which cinema you go to. It never asks again. For the Stream tab, `brew install rqbit` and grab [IINA](https://iina.io) — the Village tab needs neither.
 
 ## 🔩 Under the hood
 
@@ -102,11 +102,11 @@ flowchart LR
     E --> G[siren watches<br/>via gh api]
 ```
 
-...and the Home tab, which never touches Village at all:
+...and the Stream tab, which never touches villagecinemas.gr at all:
 
 ```mermaid
 flowchart LR
-    S[IMDB suggestion<br/>trending + live search] --> H[Home grid]
+    S[IMDB suggestion<br/>trending + live search] --> H[Stream grid]
     H --> K[Knaben + Nyaa + AniList<br/>magnets by title]
     K --> R[rqbit<br/>HTTP stream while downloading]
     R --> I[IINA<br/>+ subtitles]

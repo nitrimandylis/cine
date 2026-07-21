@@ -35,7 +35,7 @@ binary (`bun run compile` → `~/.bun/bin/cine`) with a man page.
   the watches.json of nitrimandylis/siren via `gh api`, so ticket alerts
   never require touching GitHub Actions.
 - Piped output falls back to a plain text list for scripting.
-- **Streaming hub:** `⇥` switches Cinemas ⇄ Home. Home reuses the poster
+- **Streaming hub:** `⇥` switches Village ⇄ Stream (tab labels). Stream reuses the poster
   grid/detail to search any title (IMDB suggestion), then `p` opens a source
   picker (seeders/size/source) and streams the chosen magnet into IINA —
   sources from Knaben (movies/TV) + Nyaa (anime), played via `rqbit`'s HTTP

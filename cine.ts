@@ -71,9 +71,9 @@ siren (ticket alerts via github.com/nitrimandylis/siren):
   cine unwatch <title>           stop watching
 
 keys (inside the TUI):
-  ⇥ switch tab (Cinemas / Home)   ↑/↓/←/→ move   ⏎ details   q quit
-  Cinemas: s sort · w watch · t trailer · b book · p prices · c cinema · r refresh
-  Home:    opens on recently-played + trending · / live search · p play (→ IINA)
+  ⇥ switch tab (Village / Stream)   ↑/↓/←/→ move   ⏎ details   q quit
+  Village: s sort · w watch · t trailer · b book · p prices · c cinema · r refresh
+  Stream:  opens on recently-played + trending · / live search · p play (→ IINA)
            TV/anime: ⏎ a series → seasons (←→) & episodes (↑↓); ⏎ play · n next
            watched episodes show ✓ and resume jumps to the next unwatched one
 
@@ -1638,7 +1638,7 @@ function renderStatus(msg: string) {
 function tabBar(): string {
   const chip = (name: string, active: boolean) =>
     active ? `${A.inv}${A.bold} ${name} ${A.reset}` : `${A.grey} ${name} ${A.reset}`;
-  return `${chip("Cinemas", state.tab === "cinemas")}${chip("Home", state.tab === "home")}`;
+  return `${chip("Village", state.tab === "cinemas")}${chip("Stream", state.tab === "home")}`;
 }
 
 function header(cols: number): string {
@@ -1647,7 +1647,7 @@ function header(cols: number): string {
       ? state.cinemaName
       : state.homeQuery
         ? `results · ${state.homeQuery}`
-        : "home";
+        : "stream";
   const left = ` ${A.bold}${A.cyan}CINE${A.reset} ${tabBar()}  ${A.bold}${ctx}${A.reset}`;
   const right = state.flash
     ? `${A.yellow}${state.flash}${A.reset}`
@@ -2044,36 +2044,39 @@ function quit(): never {
   process.exit(0);
 }
 
-let repaintTimer: ReturnType<typeof setTimeout> | null = null;
-
-/** Coalesce grid repaints. A burst of poster loads would otherwise trigger one
- *  full renderList each — and in kitty every render deletes and re-transmits
- *  all images, so the grid visibly thrashes. One repaint per ~120ms instead. */
-function scheduleGridRepaint() {
-  if (repaintTimer) return;
-  repaintTimer = setTimeout(() => {
-    repaintTimer = null;
-    if (state.tab === "home" && state.view === "list") renderList();
-  }, 120);
-}
-
-/** True if the movie occupies a cell in the last rendered frame (on screen). */
-function posterVisible(id: string): boolean {
+/** Draw one poster into its cell in the current frame, without touching the
+ *  rest of the screen. A full renderList would clearScreen — which in kitty
+ *  deletes and re-transmits *every* image, so a poster trickling in over the
+ *  network would flash the whole grid. This paints just the one that landed. */
+function drawPosterInCell(id: string) {
+  if (state.tab !== "home" || state.view !== "list") return;
   const list = listMovies();
-  for (const idx of state.frame.xy.keys()) if (list[idx]?.id === id) return true;
-  return false;
+  for (const [idx, pos] of state.frame.xy) {
+    if (list[idx]?.id !== id) continue;
+    const png = state.posterPaths.get(id);
+    if (!png) return;
+    if (kittySupported()) {
+      drawPoster(gridThumbPath(png), pos.y, pos.x, GRID_POSTER_ROWS, state.frame.pCols);
+    } else {
+      let buf = "";
+      posterHalfblockLines(png, GRID_POSTER_ROWS).forEach((line, li) => {
+        buf += `\x1b[${pos.y + li};${pos.x}H${line}`;
+      });
+      out(buf);
+    }
+    out(cellText(idx, list[idx], idx === state.sel));
+    return; // a movie occupies at most one visible cell
+  }
 }
 
-/** Fetch posters for a set of Home titles in the background, repainting the
- *  grid only when a poster that's actually on screen lands. */
+/** Fetch posters for a set of Home titles in the background, painting each into
+ *  its cell as it lands (off-screen ones just cache — scrolling draws them). */
 function prefetchPosters(movies: Movie[]) {
   for (const m of movies) {
     if (state.posterPaths.has(m.id)) continue;
     ensurePoster(m).then((png) => {
       state.posterPaths.set(m.id, png);
-      // off-screen posters (below the fold) don't need a repaint — scrolling to
-      // them runs a full render anyway, drawing from the now-cached path
-      if (png && state.tab === "home" && state.view === "list" && posterVisible(m.id)) scheduleGridRepaint();
+      if (png) drawPosterInCell(m.id);
     });
   }
 }
