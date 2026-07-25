@@ -921,6 +921,8 @@ function posterHalfblockLines(png: string, rows: number): string[] {
 // ---------------------------------------------------------------------------
 
 const SIREN_REPO = "nitrimandylis/siren";
+// siren keeps one folder per watcher; the cinema watcher reads this file
+const SIREN_WATCHES = "cinema/watches.json";
 
 type SirenWatch = { title: string; imax?: boolean; cinema?: string; from?: string };
 
@@ -935,7 +937,7 @@ async function gh(args: string[]): Promise<string | null> {
 }
 
 async function sirenFetch(): Promise<{ watches: SirenWatch[]; sha: string } | null> {
-  const out = await gh(["api", `repos/${SIREN_REPO}/contents/watches.json`]);
+  const out = await gh(["api", `repos/${SIREN_REPO}/contents/${SIREN_WATCHES}`]);
   if (!out) return null;
   const j = JSON.parse(out);
   return {
@@ -947,7 +949,7 @@ async function sirenFetch(): Promise<{ watches: SirenWatch[]; sha: string } | nu
 async function sirenPut(watches: SirenWatch[], sha: string, message: string): Promise<boolean> {
   const content = Buffer.from(JSON.stringify(watches, null, 2) + "\n").toString("base64");
   const out = await gh([
-    "api", "-X", "PUT", `repos/${SIREN_REPO}/contents/watches.json`,
+    "api", "-X", "PUT", `repos/${SIREN_REPO}/contents/${SIREN_WATCHES}`,
     "-f", `message=${message}`, "-f", `content=${content}`, "-f", `sha=${sha}`,
   ]);
   return out !== null;
