@@ -103,12 +103,20 @@ You need [bun](https://bun.sh) and macOS (posters lean on `sips`, links on `open
 ```bash
 git clone https://github.com/nitrimandylis/cine.git
 cd cine
-bun run compile   # → ~/.bun/bin/cine, man page into your manpath
+bun run compile   # → ~/.bun/bin/cine, man cine, and the agent skill
 cine
 man cine          # the full reference, offline
 ```
 
 First run asks which cinema you go to. It never asks again. For the Stream tab, `brew install rqbit` and grab [IINA](https://iina.io) — the Village tab needs neither.
+
+## 🤖 The agent skill
+
+`cine-cli/SKILL.md` is an agent skill for driving `cine` — that piping gives a plain list instead of the TUI, that the availability colours are Village's own flags rather than the live seat map, and that `cine stream` needs a human at the picker. The traps that don't fit in
+`--help`, in other words. `bun run compile` copies it into `~/.claude/skills/`.
+
+It's a plain directory at the repo root rather than a `.claude/` one, because this repo is public and
+not everyone drives it with the same agent. Point yours at the file.
 
 ## 🔩 Under the hood
 
