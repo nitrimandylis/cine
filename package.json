@@ -5,7 +5,7 @@
   "license": "MIT",
   "bin": { "cine": "./cine.ts" },
   "scripts": {
-    "compile": "bun build --compile cine.ts --outfile ~/.bun/bin/cine && mkdir -p $(brew --prefix)/share/man/man1 && cp man/cine.1 $(brew --prefix)/share/man/man1/"
+    "compile": "bun build --compile cine.ts --outfile ~/.bun/bin/cine && mkdir -p $(brew --prefix)/share/man/man1 && cp man/cine.1 $(brew --prefix)/share/man/man1/ && mkdir -p ~/.claude/skills && cp -R cine-cli ~/.claude/skills/"
   },
   "devDependencies": { "@types/bun": "^1.3.14" }
 }
