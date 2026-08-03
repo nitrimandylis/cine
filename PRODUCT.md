@@ -33,7 +33,10 @@ binary (`bun run compile` → `~/.bun/bin/cine`) with a man page.
   seats (Village's isLimited flag), red ✗ = sold out.
 - siren integration: `w` in the TUI or `cine watch/unwatch <title>` edits
   the watches.json of nitrimandylis/siren via `gh api`, so ticket alerts
-  never require touching GitHub Actions.
+  never require touching GitHub Actions. A watch is keyed on title + cinema:
+  `w` watches the film at the cinema you are browsing, the CLI defaults to
+  the saved cinema (`-c` overrides), and the same film can be watched at
+  several cinemas independently.
 - Piped output falls back to a plain text list for scripting.
 - **Streaming hub:** `⇥` switches Village ⇄ Stream (tab labels). Stream reuses the poster
   grid/detail to search any title (IMDB suggestion), then `p` opens a source

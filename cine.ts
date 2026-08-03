@@ -72,8 +72,8 @@ stream (skip the TUI — fzf a title, fzf a source, play in IINA):
 
 siren (ticket alerts via github.com/nitrimandylis/siren):
   cine watch                     list active watches
-  cine watch <title> [--imax]    get pinged when tickets open (-c limits cinema)
-  cine unwatch <title>           stop watching
+  cine watch <title> [--imax]    get pinged when tickets open at your cinema (-c to pick another)
+  cine unwatch <title>           stop watching it at that cinema
 
 keys (inside the TUI):
   ⇥ switch tab (Village / Stream)   ↑/↓/←/→ move   ⏎ details   q quit
@@ -955,21 +955,27 @@ async function sirenPut(watches: SirenWatch[], sha: string, message: string): Pr
   return out !== null;
 }
 
+/** A watch is identified by title + cinema, so the same film can be watched
+ *  at more than one cinema and toggling one doesn't clear the others. */
+export function sameWatch(w: SirenWatch, title: string, cinema?: string): boolean {
+  return w.title.toUpperCase() === title.toUpperCase() && (w.cinema ?? "") === (cinema ?? "");
+}
+
 /** Add or remove a watch; returns a human message describing what happened. */
 async function sirenToggle(title: string, extra: Partial<SirenWatch> = {}): Promise<string> {
   const cur = await sirenFetch();
   if (!cur) return "siren unreachable (is gh authed?)";
   const norm = title.trim().toUpperCase();
-  const existing = cur.watches.filter((w) => w.title.toUpperCase() === norm);
-  if (existing.length) {
-    const rest = cur.watches.filter((w) => w.title.toUpperCase() !== norm);
-    return (await sirenPut(rest, cur.sha, `unwatch ${norm}`))
-      ? `siren: stopped watching ${norm}`
+  const where = extra.cinema ? ` @ ${CINEMAS[extra.cinema] ?? extra.cinema}` : "";
+  const rest = cur.watches.filter((w) => !sameWatch(w, norm, extra.cinema));
+  if (rest.length !== cur.watches.length) {
+    return (await sirenPut(rest, cur.sha, `unwatch ${norm}${where}`))
+      ? `siren: stopped watching ${norm}${where}`
       : "siren update failed";
   }
   const next = [...cur.watches, { title: norm, ...extra }];
-  return (await sirenPut(next, cur.sha, `watch ${norm}`))
-    ? `siren: watching ${norm}`
+  return (await sirenPut(next, cur.sha, `watch ${norm}${where}`))
+    ? `siren: watching ${norm}${where}`
     : "siren update failed";
 }
 
@@ -2824,7 +2830,7 @@ async function handleKey(key: string) {
   if (key === "w" && selMovie && state.tab === "cinemas") {
     state.flash = "siren: syncing…";
     render();
-    state.flash = await sirenToggle(selMovie.title);
+    state.flash = await sirenToggle(selMovie.title, { cinema: state.cinemaId });
     return render();
   }
   if (key === "c" && state.tab === "cinemas") {
@@ -2961,13 +2967,20 @@ async function main() {
       }
       return;
     }
-    if (cmd === "unwatch") return console.log(await sirenToggle(title));
+    // ponytail: watches are per-cinema now — -c overrides, otherwise the saved cinema
+    const cinema = values.cinema ?? loadConfig().cinema;
     const cur = await sirenFetch();
-    if (cur?.watches.some((w) => w.title.toUpperCase() === title.toUpperCase()))
-      return console.log(`already watching ${title.toUpperCase()}`);
+    if (!cur) return console.error("siren unreachable (is gh authed?)");
+    const exists = cur.watches.some((w) => sameWatch(w, title, cinema));
+    const where = cinema ? ` at ${CINEMAS[cinema] ?? cinema}` : "";
+    // toggle only flips the (title, cinema) pair it was given, so guard both ways
+    if (cmd === "unwatch" && !exists)
+      return console.log(`not watching ${title.toUpperCase()}${where}`);
+    if (cmd === "watch" && exists)
+      return console.log(`already watching ${title.toUpperCase()}${where}`);
     const extra: { imax?: boolean; cinema?: string } = {};
     if (values.imax) extra.imax = true;
-    if (values.cinema) extra.cinema = values.cinema;
+    if (cinema) extra.cinema = cinema;
     return console.log(await sirenToggle(title, extra));
   }
   if (values.list) {

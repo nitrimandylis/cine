@@ -30,11 +30,15 @@ Answer "what's on this weekend" with `cine -d DD/MM | cat`, not by opening anyth
 ## Ticket alerts
 
 ```bash
-cine watch <title>            # get pinged when booking opens
+cine watch <title>            # get pinged when booking opens at the saved cinema
 cine watch <title> --imax
-cine watch <title> -c 21      # limit to one cinema
-cine unwatch <title>
+cine watch <title> -c 21      # watch it at a different cinema instead
+cine unwatch <title>          # stops it at that same cinema
 ```
+
+A watch is per-cinema: it is keyed on title **and** cinema, so the same film can be watched at two
+cinemas at once and stopping one leaves the other running. Both commands resolve the cinema the same
+way (`-c`, else the saved cinema), so `unwatch` without `-c` will not touch a watch you added with it.
 
 These edit the watch list in the `siren` repo via `gh api`, so a GitHub Action does the polling. They
 are writes to a remote repository: confirm the title and cinema with the user before running one, and

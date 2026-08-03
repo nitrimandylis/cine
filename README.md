@@ -44,7 +44,7 @@ nick@cine:~$ cine
 | 02 | **triple verdict** | what it actually pulls — IMDB rating via suggestion API + GraphQL, Tomatometer and Popcornmeter scraped from RT's embedded scorecard JSON, localized titles resolved through IMDB's canonical name (VAIANA → Moana) |
 | 03 | **rt icons in ascii** | what it actually renders — certified fresh, fresh tomato, rotten splat, verified hot, upright and spilled popcorn buckets, each exactly 9 columns of colored text characters |
 | 04 | **sort toggle** | what it actually cycles — IMDB → Tomatometer → Popcornmeter → runtime, one keypress, persisted between runs |
-| 05 | **ticket alerts** | what it actually edits — the watch list of [siren](https://github.com/nitrimandylis/siren) via `gh api`, so a GitHub Action pings your phone when booking opens (workflow untouched, forever) |
+| 05 | **ticket alerts** | what it actually edits — the watch list of [siren](https://github.com/nitrimandylis/siren) via `gh api`, so a GitHub Action pings your phone when booking opens (workflow untouched, forever); each watch is pinned to one cinema, so the same film at Pagrati and The Mall are two separate alerts |
 | 06 | **smart cache** | what it actually avoids — refetching for 12 hours, invalidating itself when the schema changes or every cached showtime is in the past |
 | 07 | **availability colors** | what it actually mirrors — village's own soldout/limited flags (cyan, yellow, red ✗) — which lag reality, because the live seat map hides behind a captcha we don't fight |
 

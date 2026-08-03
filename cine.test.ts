@@ -34,6 +34,7 @@ import {
   parseQuality,
   qualityLabel,
   parseTrending,
+  sameWatch,
 } from "./cine";
 
 test("parseAnime needs a romaji title and a known episode count", () => {
@@ -427,4 +428,12 @@ test("parseRtScorecard maps scores and icon states", () => {
   expect(rotten.audienceState).toBe("spilled");
 
   expect(parseRtScorecard("<html></html>", "u")).toBe(null);
+});
+
+test("a watch is keyed on title + cinema, so the same film can run at two cinemas", () => {
+  const w = { title: "AVATAR", cinema: "21" };
+  expect(sameWatch(w, "avatar", "21")).toBe(true);
+  expect(sameWatch(w, "avatar", "03")).toBe(false); // different cinema, separate watch
+  expect(sameWatch(w, "avatar", undefined)).toBe(false);
+  expect(sameWatch({ title: "AVATAR" }, "avatar", undefined)).toBe(true); // legacy all-cinemas watch
 });

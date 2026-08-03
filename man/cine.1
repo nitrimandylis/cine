@@ -88,9 +88,15 @@ List active siren ticket watches.
 Get notified when Village opens booking for \fItitle\fR, via the siren
 GitHub Actions watcher (requires an authenticated
 .BR gh (1)).
+The watch is pinned to one cinema:
+.B \-c
+picks it, otherwise the saved cinema is used. The same title can be watched
+at several cinemas as separate alerts.
 .TP
 .B unwatch \fItitle\fR
-Stop watching \fItitle\fR.
+Stop watching \fItitle\fR at that cinema (same
+.B \-c
+rule).
 .SH KEYS
 .TP
 .B arrow keys
@@ -103,7 +109,8 @@ Open the movie's detail view (poster, plot, every day's showtimes).
 Cycle the grid sort: IMDB, Tomatometer, Popcornmeter, runtime.
 .TP
 .B w
-Watch/unwatch the selected movie for ticket alerts.
+Watch/unwatch the selected movie for ticket alerts, at the cinema currently
+being browsed.
 .TP
 .B t
 Open the trailer in the browser.
