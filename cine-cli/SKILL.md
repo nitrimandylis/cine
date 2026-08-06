@@ -23,7 +23,17 @@ cine --clear             # drop the cache for your cinema, then fetch
 cine watch               # list active ticket alerts
 ```
 
-Always pipe. `cine` on its own draws a full-screen TUI that a tool call cannot render or exit.
+**Prefer `--json` over piping when you need to read the data**, since it needs no pipe and never
+changes shape for the terminal:
+
+```bash
+cine --json              # {cinema, day, movies: [{title, rating, rt_critic, rt_audience, minutes, showtimes}]}
+cine -c 21 -d 25/07 --json
+cine --list --json       # [{id, name}]
+cine watch --json        # [{title, imax, cinema, cinema_name, from}]
+```
+
+Always pipe or pass `--json`. `cine` on its own draws a full-screen TUI that a tool call cannot render or exit.
 
 Answer "what's on this weekend" with `cine -d DD/MM | cat`, not by opening anything.
 
@@ -43,6 +53,11 @@ way (`-c`, else the saved cinema), so `unwatch` without `-c` will not touch a wa
 These edit the watch list in the `siren` repo via `gh api`, so a GitHub Action does the polling. They
 are writes to a remote repository: confirm the title and cinema with the user before running one, and
 run `cine watch` afterwards to show that it landed.
+
+**Watching needs `CINE_SIREN_REPO` (or `sirenRepo` in the config file) and there is no default.** It
+names the user's own siren deploy, since these commands push to it. Unset, the watch commands print
+what to set and exit 1 while every other command keeps working, so treat that as "not configured",
+never as "the tool is broken".
 
 ## Streaming
 

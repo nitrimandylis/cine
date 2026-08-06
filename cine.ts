@@ -62,6 +62,7 @@ usage:
   cine -c 21           jump straight to a cinema by ID
   cine -d 25/07        filter piped output to a date (DD/MM)
   cine --list          list cinema IDs and exit
+  cine --json          showtimes as JSON (also on --list and watch)
   cine --clear         clear the cache for your cinema, then fetch fresh
   cine --no-cache      ignore the cache, always fetch fresh
 
@@ -70,7 +71,7 @@ stream (skip the TUI — fzf a title, fzf a source, play in IINA):
   cine stream <title> --dub      prefer dual-audio anime torrents (default: sub)
                                  needs fzf, rqbit, and IINA installed
 
-siren (ticket alerts via github.com/nitrimandylis/siren):
+siren (ticket alerts; needs your own siren deploy, see CINE_SIREN_REPO below):
   cine watch                     list active watches
   cine watch <title> [--imax]    get pinged when tickets open at your cinema (-c to pick another)
   cine unwatch <title>           stop watching it at that cinema
@@ -81,6 +82,10 @@ keys (inside the TUI):
   Stream:  opens on recently-played + trending · / live search · p play (→ IINA)
            TV/anime: ⏎ a series → seasons (←→) & episodes (↑↓); ⏎ play · n next
            watched episodes show ✓ and resume jumps to the next unwatched one
+
+CINE_SIREN_REPO=<you>/siren points the watch commands at your own deploy of
+github.com/nitrimandylis/siren (or "sirenRepo" in ~/.config/cine/config.json).
+Without it every other command still works; only watching is unavailable.
 
 Home streams via torrents (needs rqbit: brew install rqbit). showtimes: cyan
 = on sale, yellow = few seats, red ✗ = sold out — as reported by Village,
@@ -460,7 +465,7 @@ function saveCache(payload: CachePayload) {
   writeFileSync(cachePath(payload.cinemaId), JSON.stringify(payload));
 }
 
-type Config = { cinema?: string; sort?: SortKey };
+type Config = { cinema?: string; sort?: SortKey; sirenRepo?: string };
 
 function loadConfig(): Config {
   try {
@@ -920,9 +925,26 @@ function posterHalfblockLines(png: string, rows: number): string[] {
 // so ticket alerts never require editing GitHub Actions by hand
 // ---------------------------------------------------------------------------
 
-const SIREN_REPO = "nitrimandylis/siren";
 // siren keeps one folder per watcher; the cinema watcher reads this file
 const SIREN_WATCHES = "cinema/watches.json";
+
+/**
+ * Which siren repo holds the watch list.
+ *
+ * There is no default. Watching writes to a GitHub repository through `gh`, and
+ * the only repo that could be hardcoded here is the author's, which a stranger
+ * has no access to and should not be pushed at: they need their own siren, or a
+ * fork. Unset means the watch commands say so and do nothing.
+ */
+function sirenRepo(): string | null {
+  return process.env.CINE_SIREN_REPO || loadConfig().sirenRepo || null;
+}
+
+const SIREN_UNSET = `watching needs a siren repo to write to, and none is set.
+Deploy github.com/nitrimandylis/siren (or fork it), then either:
+  export CINE_SIREN_REPO=<you>/siren
+  or add "sirenRepo": "<you>/siren" to ~/.config/cine/config.json
+Everything else in cine works without it.`;
 
 type SirenWatch = { title: string; imax?: boolean; cinema?: string; from?: string };
 
@@ -937,7 +959,9 @@ async function gh(args: string[]): Promise<string | null> {
 }
 
 async function sirenFetch(): Promise<{ watches: SirenWatch[]; sha: string } | null> {
-  const out = await gh(["api", `repos/${SIREN_REPO}/contents/${SIREN_WATCHES}`]);
+  const repo = sirenRepo();
+  if (!repo) return null;
+  const out = await gh(["api", `repos/${repo}/contents/${SIREN_WATCHES}`]);
   if (!out) return null;
   const j = JSON.parse(out);
   return {
@@ -947,9 +971,11 @@ async function sirenFetch(): Promise<{ watches: SirenWatch[]; sha: string } | nu
 }
 
 async function sirenPut(watches: SirenWatch[], sha: string, message: string): Promise<boolean> {
+  const repo = sirenRepo();
+  if (!repo) return false;
   const content = Buffer.from(JSON.stringify(watches, null, 2) + "\n").toString("base64");
   const out = await gh([
-    "api", "-X", "PUT", `repos/${SIREN_REPO}/contents/${SIREN_WATCHES}`,
+    "api", "-X", "PUT", `repos/${repo}/contents/${SIREN_WATCHES}`,
     "-f", `message=${message}`, "-f", `content=${content}`, "-f", `sha=${sha}`,
   ]);
   return out !== null;
@@ -963,6 +989,7 @@ export function sameWatch(w: SirenWatch, title: string, cinema?: string): boolea
 
 /** Add or remove a watch; returns a human message describing what happened. */
 async function sirenToggle(title: string, extra: Partial<SirenWatch> = {}): Promise<string> {
+  if (!sirenRepo()) return SIREN_UNSET;
   const cur = await sirenFetch();
   if (!cur) return "siren unreachable (is gh authed?)";
   const norm = title.trim().toUpperCase();
@@ -2901,6 +2928,36 @@ async function handleKey(key: string) {
 // Plain (piped) output
 // ---------------------------------------------------------------------------
 
+/**
+ * The same showtimes printPlain renders, as one JSON object.
+ *
+ * Screening flags are kept as booleans rather than folded into a label, because
+ * the human line collapses them (a sold-out IMAX prints one way) and a consumer
+ * generally wants to filter on one of them.
+ */
+function printJson(day: string) {
+  console.log(JSON.stringify({
+    cinema: state.cinemaName,
+    day,
+    movies: moviesForDay(day).map(({ movie, times }) => ({
+      title: movie.title,
+      rating: movie.rating,
+      rt_critic: movie.rt?.critic ?? null,
+      rt_audience: movie.rt?.audience ?? null,
+      minutes: movie.minutes,
+      showtimes: times.map((t) => ({
+        hour: t.hour,
+        screen: t.screen,
+        soldout: t.soldout,
+        limited: t.limited,
+        imax: t.imax || t.imax3d,
+        dolby: t.dolby,
+        threeD: t.threeD || t.imax3d,
+      })),
+    })),
+  }));
+}
+
 function printPlain(day: string) {
   const entries = moviesForDay(day);
   console.log(`${state.cinemaName} — ${fmtDay(day, isoDay(new Date()))}\n`);
@@ -2937,6 +2994,7 @@ async function main() {
       "no-cache": { type: "boolean" },
       dub: { type: "boolean" },
       sub: { type: "boolean" }, // explicit default; --dub overrides
+      json: { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -2956,8 +3014,26 @@ async function main() {
   if (cmd === "watch" || cmd === "unwatch") {
     const title = args.join(" ").trim();
     if (!title) {
+      // Not configured is an error, not an empty list: returning [] here would
+      // tell a consumer "nothing is being watched", which is a different fact.
+      if (!sirenRepo()) {
+        process.exitCode = 1;
+        return console.error(SIREN_UNSET);
+      }
       const cur = await sirenFetch();
-      if (!cur) return console.error("siren unreachable (is gh authed?)");
+      if (!cur) {
+        process.exitCode = 1;
+        return console.error("siren unreachable (is gh authed?)");
+      }
+      if (values.json) {
+        return console.log(JSON.stringify(cur.watches.map((w) => ({
+          title: w.title,
+          imax: Boolean(w.imax),
+          cinema: w.cinema ?? null,
+          cinema_name: w.cinema ? CINEMAS[w.cinema] ?? null : null,
+          from: w.from ?? null,
+        }))));
+      }
       if (!cur.watches.length) return console.log("no active watches");
       for (const w of cur.watches) {
         const extras = [w.imax && "imax", w.cinema && CINEMAS[w.cinema], w.from && `from ${w.from}`]
@@ -2984,6 +3060,11 @@ async function main() {
     return console.log(await sirenToggle(title, extra));
   }
   if (values.list) {
+    if (values.json) {
+      return console.log(JSON.stringify(
+        Object.entries(CINEMAS).map(([id, name]) => ({ id, name })),
+      ));
+    }
     for (const [id, name] of Object.entries(CINEMAS)) console.log(`${id}  ${name}`);
     return;
   }
@@ -2998,7 +3079,9 @@ async function main() {
 
   if (values.clear && cinemaId) rmSync(cachePath(cinemaId), { force: true });
 
-  const isTty = process.stdout.isTTY && process.stdin.isTTY;
+  // --json takes the plain path even from a terminal: it is asked for on
+  // purpose, and the TUI has nothing to serialise.
+  const isTty = process.stdout.isTTY && process.stdin.isTTY && !values.json;
 
   if (!isTty) {
     if (!cinemaId) {
@@ -3007,7 +3090,7 @@ async function main() {
     }
     await loadDataPlain(cinemaId, Boolean(values["no-cache"]));
     const day = values.date ? resolveDate(values.date, state.dayList) : null;
-    return printPlain(day ?? currentDay());
+    return values.json ? printJson(day ?? currentDay()) : printPlain(day ?? currentDay());
   }
 
   // --- TUI ---

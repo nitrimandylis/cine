@@ -55,8 +55,40 @@ For anime, prefer dual-audio (dub) torrents, or subbed (the default). Affects
 both the Stream tab and
 .BR "cine stream" .
 .TP
+.B \-\-json
+Machine-readable output. Takes the plain path even from a terminal, since the
+TUI has nothing to serialise. See
+.B JSON OUTPUT
+below.
+.TP
 .BR \-h ", " \-\-help
 Show help.
+.SH JSON OUTPUT
+With
+.BR \-\-json ,
+stdout carries exactly one JSON value and nothing else; errors stay on stderr
+with a non-zero exit status.
+.TP
+.B cine [\-c \fIid\fB] [\-d \fIDD/MM\fB] \-\-json
+One object:
+.IR cinema ", " day ", and " movies ,
+an array of
+.I "{title, rating, rt_critic, rt_audience, minutes, showtimes}"
+where each showtime is
+.IR "{hour, screen, soldout, limited, imax, dolby, threeD}" .
+A rating the source did not supply is
+.BR null ,
+not zero.
+.TP
+.B cine \-\-list \-\-json
+An array of
+.IR "{id, name}" .
+.TP
+.B cine watch \-\-json
+An array of
+.IR "{title, imax, cinema, cinema_name, from}" .
+With no siren repo configured this is an error on stderr and exit 1, not an
+empty array: nothing configured and nothing watched are different facts.
 .SH COMMANDS
 .TP
 .B stream \fItitle\fR
@@ -144,10 +176,30 @@ opens details (or a season/episode browser for series),
 plays the selection in IINA, and
 .B n
 plays the next episode.
+.SH ENVIRONMENT
+.TP
+.B CINE_SIREN_REPO
+The GitHub repository holding the ticket-alert watch list, as
+.IR owner/repo .
+Deploy your own copy of
+.UR https://github.com/nitrimandylis/siren
+siren
+.UE
+and point this at it, or set
+.I sirenRepo
+in the config file. There is no default: the watch commands write to the
+repository through
+.BR gh (1),
+so it has to be one you can push to. Unset, only
+.B watch
+and
+.B unwatch
+are unavailable; everything else works.
 .SH FILES
 .TP
 .I ~/.config/cine/config.json
-Remembered default cinema.
+Remembered default cinema, sort order, and
+.IR sirenRepo .
 .TP
 .I ~/.cache/cine/
 Cached showtimes (12 h TTL), posters, trending lists, and subtitles.
