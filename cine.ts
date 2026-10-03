@@ -60,7 +60,7 @@ const HELP = `cine — Village Cinemas (Greece) showtimes with IMDB ratings and 
 usage:
   cine                 interactive TUI (remembers your cinema)
   cine -c 21           jump straight to a cinema by ID
-  cine -d 25/07        filter piped output to a date (DD/MM)
+  cine -d 25/07        show a date (DD/MM): filters piped output, opens the TUI on that day
   cine --list          list cinema IDs and exit
   cine --json          showtimes as JSON (also on --list and watch)
   cine --clear         clear the cache for your cinema, then fetch fresh
@@ -69,12 +69,15 @@ usage:
 stream (skip the TUI — fzf a title, fzf a source, play in IINA):
   cine stream <title>            e.g. cine stream dune
   cine stream <title> --dub      prefer dual-audio anime torrents (default: sub)
+  cine stream <title> --sub      subbed anime torrents (the default, so rarely needed)
                                  needs fzf, rqbit, and IINA installed
+  cine play <title>              alias for stream
 
 ticket alerts (needs a watch list over ssh, see CINE_WATCHES below):
   cine watch                     list active watches
   cine watch <title> [--imax]    get pinged when tickets open at your cinema (-c to pick another)
   cine unwatch <title>           stop watching it at that cinema
+  cine unwatch                   with no title, same as cine watch (lists)
 
 keys (inside the TUI):
   ⇥ switch tab (Village / Stream)   ↑/↓/←/→ move   ⏎ details   q quit
@@ -1444,7 +1447,7 @@ async function enrichHome(m: Movie): Promise<void> {
 // ---------------------------------------------------------------------------
 // Playback — rqbit streams a magnet over HTTP while it downloads, and IINA
 // plays that URL (seekable via range requests). rqbit is a system tool cine
-// shells out to, like sips/open/gh — not bundled. The server is left running
+// shells out to, like sips/open — not bundled. The server is left running
 // after cine exits so playback survives (IINA streams *from* it).
 // ---------------------------------------------------------------------------
 

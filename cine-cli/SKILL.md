@@ -17,7 +17,7 @@ wall. A second tab streams anything not playing near you into IINA over `rqbit`.
 cine --list              # cinema IDs and names, exits
 cine | cat               # your remembered cinema's listings, plain text
 cine -c 21 | cat         # a specific cinema by ID
-cine -d 25/07 | cat      # filter the piped list to a date (DD/MM)
+cine -d 25/07 | cat      # filter the piped list to a date (DD/MM); in the TUI it opens on that day
 cine --no-cache | cat    # ignore the 12h cache, fetch fresh
 cine --clear             # drop the cache for your cinema, then fetch
 cine watch               # list active ticket alerts
@@ -44,19 +44,20 @@ cine watch <title>            # get pinged when booking opens at the saved cinem
 cine watch <title> --imax
 cine watch <title> -c 21      # watch it at a different cinema instead
 cine unwatch <title>          # stops it at that same cinema
+cine unwatch                  # no title: same as `cine watch`, lists the active alerts
 ```
 
 A watch is per-cinema: it is keyed on title **and** cinema, so the same film can be watched at two
 cinemas at once and stopping one leaves the other running. Both commands resolve the cinema the same
 way (`-c`, else the saved cinema), so `unwatch` without `-c` will not touch a watch you added with it.
 
-These rewrite `watches.json` on the Raspberry Pi over `ssh pi`; a systemd timer there polls Village
-every 5 minutes and pings Discord. They are writes to another machine: confirm the title and cinema with the user before running one, and
+These rewrite `watches.json` on your watcher host over `ssh`; whatever runs the check there (a cron job or
+timer) reads it and sends the alert. They are writes to another machine: confirm the title and cinema with the user before running one, and
 run `cine watch` afterwards to show that it landed.
 
 **Watching needs `CINE_WATCHES` (or `watches` in the config file, set to
-`pi:pi/cron/cinema/watches.json`) and there is no default.** It names the user's own watcher host,
-since these commands write to it. "watch list unreachable" means the Pi is off or off the network. Unset, the watch commands print
+`<ssh-host>:<path>`) and there is no default.** It names the user's own watcher host,
+since these commands write to it. "watch list unreachable (is the ssh host up?)" means the host is off or off the network. Unset, the watch commands print
 what to set and exit 1 while every other command keeps working, so treat that as "not configured",
 never as "the tool is broken".
 
@@ -65,6 +66,8 @@ never as "the tool is broken".
 ```bash
 cine stream <title>          # fzf a title, fzf a source, play in IINA
 cine stream <title> --dub    # prefer dual-audio anime (default: sub)
+cine stream <title> --sub    # subbed anime, the default
+cine play <title>            # alias for `cine stream`
 ```
 
 **`cine stream` is two or three fzf pickers deep and cannot be driven headlessly.** Series add a

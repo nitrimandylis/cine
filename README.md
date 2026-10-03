@@ -44,7 +44,7 @@ nick@cine:~$ cine
 | 02 | **triple verdict** | what it actually pulls — IMDB rating via suggestion API + GraphQL, Tomatometer and Popcornmeter scraped from RT's embedded scorecard JSON, localized titles resolved through IMDB's canonical name (VAIANA → Moana) |
 | 03 | **rt icons in ascii** | what it actually renders — certified fresh, fresh tomato, rotten splat, verified hot, upright and spilled popcorn buckets, each exactly 9 columns of colored text characters |
 | 04 | **sort toggle** | what it actually cycles — IMDB → Tomatometer → Popcornmeter → runtime, one keypress, persisted between runs |
-| 05 | **ticket alerts** | what it actually edits — the `watches.json` your own watcher polls, over ssh (mine is a Raspberry Pi on a 5-min systemd timer that pings my phone when booking opens); each watch is pinned to one cinema, so the same film at Pagrati and The Mall are two separate alerts. set `CINE_WATCHES=<ssh-host>:<path>`, there is no default because these commands write to your machine |
+| 05 | **ticket alerts** | what it actually edits — the `watches.json` your own watcher polls, over ssh (mine is a Raspberry Pi on a 5-min systemd timer that pings my phone when booking opens); each watch is pinned to one cinema, so the same film at Pagrati and The Mall are two separate alerts. `cine unwatch` with no title just lists, like `cine watch`. set `CINE_WATCHES=<ssh-host>:<path>`, there is no default because these commands write to your machine |
 | 05a | **`--json`** | showtimes, `--list` and `watch` as JSON on stdout, for scripts. takes the plain path even from a terminal |
 | 06 | **smart cache** | what it actually avoids — refetching for 12 hours, invalidating itself when the schema changes or every cached showtime is in the past |
 | 07 | **availability colors** | what it actually mirrors — village's own soldout/limited flags (cyan, yellow, red ✗) — which lag reality, because the live seat map hides behind a captcha we don't fight |
@@ -61,7 +61,7 @@ Press `⇥` for **Stream** and cine stops caring about Athens. Type a title, hit
 | 02 | **live search** | `/` and type; results stream in as you go (IMDB suggestion API, debounced) — no enter-to-search |
 | 03 | **source picker** | seeders, size, and a **quality** column parsed out of the release name (2160p · HDR · x265 · WEB-DL), highest-seeded first, across Knaben (movies/TV) + Nyaa (anime — anime-only, so no anime bleeds into a TV search) — filtered to the show you actually asked for, so `House` returns *House*, not `House of the Dragon` |
 | 04 | **buffering feedback** | after you pick, cine buffers the file head (showing MB · speed) before handing the URL to IINA — so playback starts instead of hanging on an empty stream |
-| 05 | **tv & anime browser** | series open a season/episode browser (IMDB GraphQL); anime is detected via AniList and numbered the way Nyaa releases it — romaji + episode, not `SxxEyy`. Each episode is searched under every AniList title (romaji · english · synonyms, so `DAN DA DAN` is found, not just `Dandadan`), padded and unpadded; still-airing shows work; `--dub` prefers dual-audio |
+| 05 | **tv & anime browser** | series open a season/episode browser (IMDB GraphQL); anime is detected via AniList and numbered the way Nyaa releases it — romaji + episode, not `SxxEyy`. Each episode is searched under every AniList title (romaji · english · synonyms, so `DAN DA DAN` is found, not just `Dandadan`), padded and unpadded; still-airing shows work; `--dub` prefers dual-audio (`--sub`, the default, prefers subbed); `cine play` is an alias for `cine stream` |
 | 06 | **watched & resume** | `✓` on episodes you've streamed, selection jumps to the next unwatched one, `n` plays the next episode without reopening the picker |
 | 07 | **subtitles, handled** | external English `.srt` by IMDB id (yifysubtitles), plus any subs shipped in the torrent, plus embedded MKV tracks — all attached to IINA, English first |
 
@@ -99,7 +99,7 @@ nick@cine:~$ cine stream dandadan --dub
 
 ## 🚀 Run it
 
-You need [bun](https://bun.sh) and macOS (posters lean on `sips`, links on `open`).
+You need [bun](https://bun.sh) and macOS (posters lean on `sips`, links on `open`). Ticket alerts also need key-based `ssh` to a host you control.
 
 ```bash
 git clone https://github.com/nitrimandylis/cine.git
@@ -109,7 +109,7 @@ cine
 man cine          # the full reference, offline
 ```
 
-First run asks which cinema you go to. It never asks again. For the Stream tab, `brew install rqbit` and grab [IINA](https://iina.io) — the Village tab needs neither.
+First run asks which cinema you go to. It never asks again. For the Stream tab, `brew install rqbit` and grab [IINA](https://iina.io) — the Village tab needs neither. For ticket alerts, set `CINE_WATCHES=<ssh-host>:<path>` to a host you can reach with key-based ssh; without it, only `watch` and `unwatch` are unavailable.
 
 ## 🤖 The agent skill
 

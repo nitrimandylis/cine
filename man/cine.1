@@ -39,7 +39,8 @@ nor IINA.
 Jump straight to a cinema by ID (see \fB\-\-list\fR).
 .TP
 .BR \-d ", " \-\-date " " \fIDD/MM\fR
-Filter piped (plain) output to a specific date.
+Show a specific date: filters piped (plain) output, and opens the TUI on that
+day.
 .TP
 .B \-\-list
 List available cinema IDs and exit.
@@ -92,6 +93,8 @@ empty array: nothing configured and nothing watched are different facts.
 .SH COMMANDS
 .TP
 .B stream \fItitle\fR
+Also available as
+.BR play .
 Skip the TUI and stream from the command line: pick a title, then a source,
 each through
 .BR fzf (1),
@@ -128,7 +131,9 @@ at several cinemas as separate alerts.
 .B unwatch \fItitle\fR
 Stop watching \fItitle\fR at that cinema (same
 .B \-c
-rule).
+rule). With no title it behaves like
+.BR watch ,
+listing the active watches.
 .SH KEYS
 .TP
 .B arrow keys
@@ -209,4 +214,5 @@ Stream tab history: recently played titles and episode resume state.
 .BR open (1),
 .BR fzf (1),
 .BR rqbit (1),
-.BR iina (1)
+.BR iina (1),
+.BR ssh (1)
