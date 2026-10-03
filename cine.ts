@@ -71,7 +71,7 @@ stream (skip the TUI — fzf a title, fzf a source, play in IINA):
   cine stream <title> --dub      prefer dual-audio anime torrents (default: sub)
                                  needs fzf, rqbit, and IINA installed
 
-siren (ticket alerts; needs your own siren deploy, see CINE_SIREN_REPO below):
+ticket alerts (needs a watch list over ssh, see CINE_WATCHES below):
   cine watch                     list active watches
   cine watch <title> [--imax]    get pinged when tickets open at your cinema (-c to pick another)
   cine unwatch <title>           stop watching it at that cinema
@@ -83,8 +83,8 @@ keys (inside the TUI):
            TV/anime: ⏎ a series → seasons (←→) & episodes (↑↓); ⏎ play · n next
            watched episodes show ✓ and resume jumps to the next unwatched one
 
-CINE_SIREN_REPO=<you>/siren points the watch commands at your own deploy of
-github.com/nitrimandylis/siren (or "sirenRepo" in ~/.config/cine/config.json).
+CINE_WATCHES=<ssh-host>:<path> points the watch commands at the watches.json
+your watcher reads (or "watches" in ~/.config/cine/config.json).
 Without it every other command still works; only watching is unavailable.
 
 Home streams via torrents (needs rqbit: brew install rqbit). showtimes: cyan
@@ -465,7 +465,7 @@ function saveCache(payload: CachePayload) {
   writeFileSync(cachePath(payload.cinemaId), JSON.stringify(payload));
 }
 
-type Config = { cinema?: string; sort?: SortKey; sirenRepo?: string };
+type Config = { cinema?: string; sort?: SortKey; watches?: string };
 
 function loadConfig(): Config {
   try {
@@ -921,89 +921,89 @@ function posterHalfblockLines(png: string, rows: number): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// siren integration — manage nitrimandylis/siren's watches.json via gh(1)
-// so ticket alerts never require editing GitHub Actions by hand
+// ticket alerts — edit the watcher's watches.json over ssh, in place on the
+// machine that polls Village (a Raspberry Pi running a systemd timer)
 // ---------------------------------------------------------------------------
 
-// siren keeps one folder per watcher; the cinema watcher reads this file
-const SIREN_WATCHES = "cinema/watches.json";
-
 /**
- * Which siren repo holds the watch list.
+ * Where the watch list lives, scp-style: "host:path", e.g.
+ * "pi:pi/cron/cinema/watches.json" (path relative to the remote home).
  *
- * There is no default. Watching writes to a GitHub repository through `gh`, and
- * the only repo that could be hardcoded here is the author's, which a stranger
- * has no access to and should not be pushed at: they need their own siren, or a
- * fork. Unset means the watch commands say so and do nothing.
+ * There is no default. Watching writes a file on someone's own machine, and the
+ * only target that could be hardcoded is the author's. Unset means the watch
+ * commands say so and do nothing.
  */
-function sirenRepo(): string | null {
-  return process.env.CINE_SIREN_REPO || loadConfig().sirenRepo || null;
+function watchTarget(): { host: string; path: string } | null {
+  const raw = process.env.CINE_WATCHES || loadConfig().watches;
+  if (!raw) return null;
+  const colon = raw.indexOf(":");
+  if (colon < 1) return null;
+  return { host: raw.slice(0, colon), path: raw.slice(colon + 1) };
 }
 
-const SIREN_UNSET = `watching needs a siren repo to write to, and none is set.
-Deploy github.com/nitrimandylis/siren (or fork it), then either:
-  export CINE_SIREN_REPO=<you>/siren
-  or add "sirenRepo": "<you>/siren" to ~/.config/cine/config.json
+const WATCHES_UNSET = `watching needs a watch list to write to, and none is set (or it is not host:path).
+Point cine at the watches.json your watcher reads, over ssh:
+  export CINE_WATCHES=<ssh-host>:<path/to/watches.json>
+  or add "watches": "<ssh-host>:<path>" to ~/.config/cine/config.json
 Everything else in cine works without it.`;
 
-type SirenWatch = { title: string; imax?: boolean; cinema?: string; from?: string };
+type Watch = { title: string; imax?: boolean; cinema?: string; from?: string };
 
-async function gh(args: string[]): Promise<string | null> {
+/** Run a command on the watch host. BatchMode so a password prompt fails fast
+ *  instead of hanging the TUI. Returns stdout, or null on any failure. */
+async function ssh(host: string, command: string, stdin?: string): Promise<string | null> {
   try {
-    const proc = Bun.spawn(["gh", ...args], { stdout: "pipe", stderr: "ignore" });
+    const proc = Bun.spawn(
+      ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", host, command],
+      { stdin: stdin === undefined ? "ignore" : new Blob([stdin]), stdout: "pipe", stderr: "ignore" },
+    );
     const out = await new Response(proc.stdout).text();
     return (await proc.exited) === 0 ? out : null;
   } catch {
-    return null; // gh not installed
+    return null; // ssh not installed
   }
 }
 
-async function sirenFetch(): Promise<{ watches: SirenWatch[]; sha: string } | null> {
-  const repo = sirenRepo();
-  if (!repo) return null;
-  const out = await gh(["api", `repos/${repo}/contents/${SIREN_WATCHES}`]);
-  if (!out) return null;
-  const j = JSON.parse(out);
-  return {
-    watches: JSON.parse(Buffer.from(j.content, "base64").toString("utf-8")),
-    sha: j.sha,
-  };
+async function watchesFetch(): Promise<Watch[] | null> {
+  const target = watchTarget();
+  if (!target) return null;
+  const out = await ssh(target.host, `cat '${target.path}'`);
+  if (out === null) return null;
+  return JSON.parse(out);
 }
 
-async function sirenPut(watches: SirenWatch[], sha: string, message: string): Promise<boolean> {
-  const repo = sirenRepo();
-  if (!repo) return false;
-  const content = Buffer.from(JSON.stringify(watches, null, 2) + "\n").toString("base64");
-  const out = await gh([
-    "api", "-X", "PUT", `repos/${repo}/contents/${SIREN_WATCHES}`,
-    "-f", `message=${message}`, "-f", `content=${content}`, "-f", `sha=${sha}`,
-  ]);
-  return out !== null;
+// Write to a temp file and rename, so a watcher run that lands mid-write never
+// reads half a JSON file.
+async function watchesPut(watches: Watch[]): Promise<boolean> {
+  const target = watchTarget();
+  if (!target) return false;
+  const json = JSON.stringify(watches, null, 2) + "\n";
+  const p = target.path;
+  return (await ssh(target.host, `cat > '${p}.tmp' && mv '${p}.tmp' '${p}'`, json)) !== null;
 }
+
+const WATCHES_UNREACHABLE = "watch list unreachable (is the ssh host up?)";
 
 /** A watch is identified by title + cinema, so the same film can be watched
  *  at more than one cinema and toggling one doesn't clear the others. */
-export function sameWatch(w: SirenWatch, title: string, cinema?: string): boolean {
+export function sameWatch(w: Watch, title: string, cinema?: string): boolean {
   return w.title.toUpperCase() === title.toUpperCase() && (w.cinema ?? "") === (cinema ?? "");
 }
 
 /** Add or remove a watch; returns a human message describing what happened. */
-async function sirenToggle(title: string, extra: Partial<SirenWatch> = {}): Promise<string> {
-  if (!sirenRepo()) return SIREN_UNSET;
-  const cur = await sirenFetch();
-  if (!cur) return "siren unreachable (is gh authed?)";
+async function watchToggle(title: string, extra: Partial<Watch> = {}): Promise<string> {
+  if (!watchTarget()) return WATCHES_UNSET;
+  const cur = await watchesFetch();
+  if (!cur) return WATCHES_UNREACHABLE;
   const norm = title.trim().toUpperCase();
   const where = extra.cinema ? ` @ ${CINEMAS[extra.cinema] ?? extra.cinema}` : "";
-  const rest = cur.watches.filter((w) => !sameWatch(w, norm, extra.cinema));
-  if (rest.length !== cur.watches.length) {
-    return (await sirenPut(rest, cur.sha, `unwatch ${norm}${where}`))
-      ? `siren: stopped watching ${norm}${where}`
-      : "siren update failed";
+  const rest = cur.filter((w) => !sameWatch(w, norm, extra.cinema));
+  if (rest.length !== cur.length) {
+    return (await watchesPut(rest)) ? `stopped watching ${norm}${where}` : "watch update failed";
   }
-  const next = [...cur.watches, { title: norm, ...extra }];
-  return (await sirenPut(next, cur.sha, `watch ${norm}${where}`))
-    ? `siren: watching ${norm}${where}`
-    : "siren update failed";
+  return (await watchesPut([...cur, { title: norm, ...extra }]))
+    ? `watching ${norm}${where}`
+    : "watch update failed";
 }
 
 // ---------------------------------------------------------------------------
@@ -2855,9 +2855,9 @@ async function handleKey(key: string) {
     return render();
   }
   if (key === "w" && selMovie && state.tab === "cinemas") {
-    state.flash = "siren: syncing…";
+    state.flash = "watch: syncing…";
     render();
-    state.flash = await sirenToggle(selMovie.title, { cinema: state.cinemaId });
+    state.flash = await watchToggle(selMovie.title, { cinema: state.cinemaId });
     return render();
   }
   if (key === "c" && state.tab === "cinemas") {
@@ -3010,23 +3010,23 @@ async function main() {
     return streamCli(query);
   }
 
-  // siren subcommands: cine watch [title] [--imax] [-c id], cine unwatch <title>
+  // ticket alert subcommands: cine watch [title] [--imax] [-c id], cine unwatch <title>
   if (cmd === "watch" || cmd === "unwatch") {
     const title = args.join(" ").trim();
     if (!title) {
       // Not configured is an error, not an empty list: returning [] here would
       // tell a consumer "nothing is being watched", which is a different fact.
-      if (!sirenRepo()) {
+      if (!watchTarget()) {
         process.exitCode = 1;
-        return console.error(SIREN_UNSET);
+        return console.error(WATCHES_UNSET);
       }
-      const cur = await sirenFetch();
+      const cur = await watchesFetch();
       if (!cur) {
         process.exitCode = 1;
-        return console.error("siren unreachable (is gh authed?)");
+        return console.error(WATCHES_UNREACHABLE);
       }
       if (values.json) {
-        return console.log(JSON.stringify(cur.watches.map((w) => ({
+        return console.log(JSON.stringify(cur.map((w) => ({
           title: w.title,
           imax: Boolean(w.imax),
           cinema: w.cinema ?? null,
@@ -3034,8 +3034,8 @@ async function main() {
           from: w.from ?? null,
         }))));
       }
-      if (!cur.watches.length) return console.log("no active watches");
-      for (const w of cur.watches) {
+      if (!cur.length) return console.log("no active watches");
+      for (const w of cur) {
         const extras = [w.imax && "imax", w.cinema && CINEMAS[w.cinema], w.from && `from ${w.from}`]
           .filter(Boolean)
           .join(", ");
@@ -3045,9 +3045,16 @@ async function main() {
     }
     // ponytail: watches are per-cinema now — -c overrides, otherwise the saved cinema
     const cinema = values.cinema ?? loadConfig().cinema;
-    const cur = await sirenFetch();
-    if (!cur) return console.error("siren unreachable (is gh authed?)");
-    const exists = cur.watches.some((w) => sameWatch(w, title, cinema));
+    if (!watchTarget()) {
+      process.exitCode = 1;
+      return console.error(WATCHES_UNSET);
+    }
+    const cur = await watchesFetch();
+    if (!cur) {
+      process.exitCode = 1;
+      return console.error(WATCHES_UNREACHABLE);
+    }
+    const exists = cur.some((w) => sameWatch(w, title, cinema));
     const where = cinema ? ` at ${CINEMAS[cinema] ?? cinema}` : "";
     // toggle only flips the (title, cinema) pair it was given, so guard both ways
     if (cmd === "unwatch" && !exists)
@@ -3057,7 +3064,7 @@ async function main() {
     const extra: { imax?: boolean; cinema?: string } = {};
     if (values.imax) extra.imax = true;
     if (cinema) extra.cinema = cinema;
-    return console.log(await sirenToggle(title, extra));
+    return console.log(await watchToggle(title, extra));
   }
   if (values.list) {
     if (values.json) {

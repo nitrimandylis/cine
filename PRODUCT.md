@@ -31,9 +31,10 @@ binary (`bun run compile` → `~/.bun/bin/cine`) with a man page.
 - `s` cycles the sort (IMDB → Tomatometer → Popcornmeter → runtime),
   persisted in config. Showtimes color-code availability: yellow = few
   seats (Village's isLimited flag), red ✗ = sold out.
-- siren integration: `w` in the TUI or `cine watch/unwatch <title>` edits
-  the watches.json of nitrimandylis/siren via `gh api`, so ticket alerts
-  never require touching GitHub Actions. A watch is keyed on title + cinema:
+- Ticket alerts: `w` in the TUI or `cine watch/unwatch <title>` edits the
+  watches.json the watcher reads, over ssh (`watches: "pi:pi/cron/cinema/watches.json"`,
+  the Pi's 5-min systemd timer). It replaced siren's GitHub Action on
+  2026-10-03 after siren was archived. A watch is keyed on title + cinema:
   `w` watches the film at the cinema you are browsing, the CLI defaults to
   the saved cinema (`-c` overrides), and the same film can be watched at
   several cinemas independently.

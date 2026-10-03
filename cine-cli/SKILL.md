@@ -50,12 +50,13 @@ A watch is per-cinema: it is keyed on title **and** cinema, so the same film can
 cinemas at once and stopping one leaves the other running. Both commands resolve the cinema the same
 way (`-c`, else the saved cinema), so `unwatch` without `-c` will not touch a watch you added with it.
 
-These edit the watch list in the `siren` repo via `gh api`, so a GitHub Action does the polling. They
-are writes to a remote repository: confirm the title and cinema with the user before running one, and
+These rewrite `watches.json` on the Raspberry Pi over `ssh pi`; a systemd timer there polls Village
+every 5 minutes and pings Discord. They are writes to another machine: confirm the title and cinema with the user before running one, and
 run `cine watch` afterwards to show that it landed.
 
-**Watching needs `CINE_SIREN_REPO` (or `sirenRepo` in the config file) and there is no default.** It
-names the user's own siren deploy, since these commands push to it. Unset, the watch commands print
+**Watching needs `CINE_WATCHES` (or `watches` in the config file, set to
+`pi:pi/cron/cinema/watches.json`) and there is no default.** It names the user's own watcher host,
+since these commands write to it. "watch list unreachable" means the Pi is off or off the network. Unset, the watch commands print
 what to set and exit 1 while every other command keeps working, so treat that as "not configured",
 never as "the tool is broken".
 

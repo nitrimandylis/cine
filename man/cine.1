@@ -87,7 +87,7 @@ An array of
 .B cine watch \-\-json
 An array of
 .IR "{title, imax, cinema, cinema_name, from}" .
-With no siren repo configured this is an error on stderr and exit 1, not an
+With no watch list configured this is an error on stderr and exit 1, not an
 empty array: nothing configured and nothing watched are different facts.
 .SH COMMANDS
 .TP
@@ -114,12 +114,12 @@ prefers dual-audio releases. Needs
 and IINA installed.
 .TP
 .B watch
-List active siren ticket watches.
+List active ticket watches.
 .TP
 .B watch \fItitle\fR [\fB\-\-imax\fR] [\fB\-c\fR \fIid\fR]
-Get notified when Village opens booking for \fItitle\fR, via the siren
-GitHub Actions watcher (requires an authenticated
-.BR gh (1)).
+Get notified when Village opens booking for \fItitle\fR, by adding it to
+the watch list your watcher polls, over
+.BR ssh (1).
 The watch is pinned to one cinema:
 .B \-c
 picks it, otherwise the saved cinema is used. The same title can be watched
@@ -178,19 +178,17 @@ plays the selection in IINA, and
 plays the next episode.
 .SH ENVIRONMENT
 .TP
-.B CINE_SIREN_REPO
-The GitHub repository holding the ticket-alert watch list, as
-.IR owner/repo .
-Deploy your own copy of
-.UR https://github.com/nitrimandylis/siren
-siren
-.UE
-and point this at it, or set
-.I sirenRepo
-in the config file. There is no default: the watch commands write to the
-repository through
-.BR gh (1),
-so it has to be one you can push to. Unset, only
+.B CINE_WATCHES
+The ticket-alert watch list, scp-style as
+.IR host:path ,
+e.g.
+.BR pi:pi/cron/cinema/watches.json
+(path relative to the remote home). Or set
+.I watches
+in the config file. There is no default: the watch commands rewrite that
+file through
+.BR ssh (1),
+so the host needs key-based login. Unset, only
 .B watch
 and
 .B unwatch
@@ -199,7 +197,7 @@ are unavailable; everything else works.
 .TP
 .I ~/.config/cine/config.json
 Remembered default cinema, sort order, and
-.IR sirenRepo .
+.IR watches .
 .TP
 .I ~/.cache/cine/
 Cached showtimes (12 h TTL), posters, trending lists, and subtitles.
