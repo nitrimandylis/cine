@@ -146,7 +146,7 @@ flowchart LR
 | tests | `cine.test.ts` | pure-logic checks: parsers, cache staleness, icon alignment, sort order |
 | man page | `man/cine.1` | hand-written roff, installed by `bun run compile` |
 
-**Stack:** bun · typescript · fetch · sips(1) · open(1) · gh(1) · rqbit(1) · iina(1) — and zero packages in node_modules that aren't `@types/bun`
+**Stack:** bun · typescript · fetch · sips(1) · open(1) · ssh(1) · rqbit(1) · iina(1) — and zero packages in node_modules that aren't `@types/bun`
 
 ---
 

@@ -98,7 +98,7 @@ binary (`bun run compile` → `~/.bun/bin/cine`) with a man page.
   year dropped), never have extra leading words — so `House S01E01` returns the
   real *House* pilot, not `House of the Dragon` / `Spartacus House of Ashur`.
   Falls back to unfiltered if it would drop everything.
-- Flags: `-c`, `-d DD/MM`, `--list`, `--clear`, `--no-cache`, `--dub`/`--sub`.
+- Flags: `-c`, `-d DD/MM`, `--list`, `--clear`, `--no-cache`, `--dub`/`--sub`, `--imax` (on `watch`), `--json`.
 
 ## Where it's headed
 
